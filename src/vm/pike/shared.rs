@@ -1,9 +1,21 @@
 //! Shared types for PikeVM execution.
 //!
 //! Contains thread management structures and utilities used by the interpreter.
+//!
+//! # Copy-On-Write Captures
+//!
+//! Thread captures use a linked-list based Copy-On-Write (COW) strategy to avoid
+//! expensive Vec cloning on every thread fork. Instead of storing a full Vec of
+//! captures in each thread, we store:
+//! - A reference-counted pointer to the parent thread's capture history
+//! - The specific capture action this thread took (if any)
+//!
+//! This makes thread creation O(1) instead of O(G) where G is the number of capture groups.
+//! The full capture Vec is only reconstructed when a match is found.
 
 use crate::nfa::StateId;
 use std::collections::BinaryHeap;
+use std::rc::Rc;
 
 /// Thread scheduled for a future position (used for backrefs).
 #[derive(Debug)]
@@ -89,33 +101,168 @@ impl PikeVmContext {
     }
 }
 
+/// A capture action in the linked list.
+/// Each action records a single capture start or end event.
+#[derive(Debug, Clone)]
+pub enum CaptureAction {
+    /// Start of capture group at position
+    Start(u32, usize),
+    /// End of capture group at position
+    End(u32, usize),
+}
+
+/// A node in the capture history linked list.
+/// Uses Rc for O(1) thread forking - just increment reference count.
+#[derive(Debug, Clone)]
+pub struct CaptureNode {
+    /// The capture action at this node
+    pub action: CaptureAction,
+    /// Link to parent node (previous capture action)
+    pub parent: Option<Rc<CaptureNode>>,
+}
+
+impl CaptureNode {
+    /// Create a new capture node with the given action and parent.
+    #[inline]
+    pub fn new(action: CaptureAction, parent: Option<Rc<CaptureNode>>) -> Rc<Self> {
+        Rc::new(Self { action, parent })
+    }
+}
+
 /// A thread in the PikeVM.
+///
+/// Uses Copy-On-Write (COW) captures via a linked list to avoid expensive
+/// Vec cloning on every thread fork. Thread creation is O(1) - just increment
+/// an Rc counter. The full capture Vec is reconstructed only when a match is found.
 #[derive(Debug, Clone)]
 pub struct Thread {
     /// Current NFA state.
     pub state: StateId,
-    /// Capture group slots: (start, end) for each group.
-    /// Index 0 is the full match.
-    pub captures: Vec<Option<(usize, usize)>>,
+    /// Head of the capture history linked list.
+    /// None means no captures have been recorded yet.
+    pub capture_head: Option<Rc<CaptureNode>>,
+    /// Number of capture groups (needed for reconstruction).
+    pub capture_count: usize,
     /// Whether this thread passed through a non-greedy exit.
     /// If true, a match found by this thread should be returned immediately.
     pub non_greedy_exit: bool,
 }
 
 impl Thread {
+    /// Create a new thread with no capture history.
+    #[inline]
     pub fn new(state: StateId, capture_count: usize) -> Self {
         Self {
             state,
-            captures: vec![None; capture_count + 1],
+            capture_head: None,
+            capture_count,
             non_greedy_exit: false,
         }
     }
 
+    /// Clone this thread with a new state. O(1) operation - just increments Rc counter.
+    #[inline]
     pub fn clone_with_state(&self, state: StateId) -> Self {
         Self {
             state,
-            captures: self.captures.clone(),
+            capture_head: self.capture_head.clone(), // Rc::clone is O(1)
+            capture_count: self.capture_count,
             non_greedy_exit: self.non_greedy_exit,
+        }
+    }
+
+    /// Record a capture start event. O(1) operation.
+    #[inline]
+    pub fn record_capture_start(&mut self, group_idx: u32, pos: usize) {
+        let node = CaptureNode::new(
+            CaptureAction::Start(group_idx, pos),
+            self.capture_head.take(),
+        );
+        self.capture_head = Some(node);
+    }
+
+    /// Record a capture end event. O(1) operation.
+    #[inline]
+    pub fn record_capture_end(&mut self, group_idx: u32, pos: usize) {
+        let node = CaptureNode::new(
+            CaptureAction::End(group_idx, pos),
+            self.capture_head.take(),
+        );
+        self.capture_head = Some(node);
+    }
+
+    /// Reconstruct the full capture Vec from the linked list.
+    /// Called only when a match is found. O(depth) where depth is number of capture actions.
+    pub fn reconstruct_captures(&self) -> Vec<Option<(usize, usize)>> {
+        let mut captures = vec![None; self.capture_count + 1];
+
+        // Walk the linked list backwards to collect all actions
+        let mut actions = Vec::new();
+        let mut current = self.capture_head.as_ref();
+        while let Some(node) = current {
+            actions.push(&node.action);
+            current = node.parent.as_ref();
+        }
+
+        // Process actions in reverse order (oldest first) to build final capture state
+        // For each group, we want the LAST (most recent) start and end positions
+        // But we process oldest-first, so each new value overwrites the old
+        for action in actions.into_iter().rev() {
+            match action {
+                CaptureAction::Start(idx, pos) => {
+                    let idx = *idx as usize;
+                    if idx < captures.len() {
+                        // Start a new capture - set start position, end will be set later
+                        captures[idx] = Some((*pos, *pos));
+                    }
+                }
+                CaptureAction::End(idx, pos) => {
+                    let idx = *idx as usize;
+                    if idx < captures.len() {
+                        if let Some((start, _)) = captures[idx] {
+                            captures[idx] = Some((start, *pos));
+                        }
+                    }
+                }
+            }
+        }
+
+        captures
+    }
+
+    /// Get a capture group value by walking the linked list.
+    /// Used for backref matching - more efficient than full reconstruction.
+    /// Returns None if capture group is not set or incomplete.
+    pub fn get_capture(&self, group_idx: u32) -> Option<(usize, usize)> {
+        let mut start: Option<usize> = None;
+        let mut end: Option<usize> = None;
+
+        // Walk backwards to find the most recent start and end for this group
+        let mut current = self.capture_head.as_ref();
+        while let Some(node) = current {
+            match &node.action {
+                CaptureAction::Start(idx, pos) if *idx == group_idx => {
+                    if start.is_none() {
+                        start = Some(*pos);
+                    }
+                }
+                CaptureAction::End(idx, pos) if *idx == group_idx => {
+                    if end.is_none() {
+                        end = Some(*pos);
+                    }
+                }
+                _ => {}
+            }
+            // Early exit if we found both
+            if start.is_some() && end.is_some() {
+                break;
+            }
+            current = node.parent.as_ref();
+        }
+
+        match (start, end) {
+            (Some(s), Some(e)) => Some((s, e)),
+            _ => None,
         }
     }
 }

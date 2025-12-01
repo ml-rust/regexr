@@ -190,12 +190,13 @@ impl PikeVm {
             if let Some(idx) = match_thread_idx {
                 let thread = &ctx.current_threads[idx];
                 if thread.non_greedy_exit {
-                    let mut caps = thread.captures.clone();
+                    // Reconstruct captures from linked list (only done on match)
+                    let mut caps = thread.reconstruct_captures();
                     caps[0] = Some((start_pos, pos));
                     return Some(caps);
                 }
                 // Greedy: record but continue
-                let mut caps = thread.captures.clone();
+                let mut caps = thread.reconstruct_captures();
                 caps[0] = Some((start_pos, pos));
                 matched = Some(caps);
             }
@@ -427,19 +428,11 @@ impl PikeVm {
     ) -> InstructionResult {
         match instruction {
             NfaInstruction::CaptureStart(idx) => {
-                let idx = *idx as usize;
-                if idx < thread.captures.len() {
-                    thread.captures[idx] = Some((pos, pos));
-                }
+                thread.record_capture_start(*idx, pos);
                 InstructionResult::Continue
             }
             NfaInstruction::CaptureEnd(idx) => {
-                let idx = *idx as usize;
-                if idx < thread.captures.len() {
-                    if let Some((start, _)) = thread.captures[idx] {
-                        thread.captures[idx] = Some((start, pos));
-                    }
-                }
+                thread.record_capture_end(*idx, pos);
                 InstructionResult::Continue
             }
             NfaInstruction::StartOfText => {
@@ -485,8 +478,7 @@ impl PikeVm {
                 }
             }
             NfaInstruction::Backref(idx) => {
-                let idx = *idx as usize;
-                if let Some(Some((cap_start, cap_end))) = thread.captures.get(idx) {
+                if let Some((cap_start, cap_end)) = thread.get_capture(*idx) {
                     let cap_len = cap_end - cap_start;
 
                     // Empty capture - just continue (no text to match)
@@ -497,7 +489,7 @@ impl PikeVm {
                     if pos + cap_len > input.len() {
                         return InstructionResult::Kill;
                     }
-                    let captured = &input[*cap_start..*cap_end];
+                    let captured = &input[cap_start..cap_end];
                     let current = &input[pos..pos + cap_len];
                     if captured != current {
                         return InstructionResult::Kill;
