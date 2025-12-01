@@ -2,7 +2,7 @@
 
 use crate::hir::{Hir, HirExpr};
 use crate::nfa::Nfa;
-use crate::vm::is_shift_or_compatible;
+use crate::vm::{is_shift_or_compatible, is_shift_or_wide_compatible};
 
 /// Recursively checks if an HIR expression contains UnicodeCpClass nodes.
 /// These require PikeVM because they use the CodepointClass instruction
@@ -33,6 +33,8 @@ pub enum EngineType {
     BacktrackingVm,
     /// Shift-Or - for small patterns (≤64 character positions).
     ShiftOr,
+    /// Wide Shift-Or - for medium patterns (65-256 character positions).
+    ShiftOrWide,
     /// Lazy DFA - default for most patterns.
     LazyDfa,
     /// JIT-compiled DFA - when available and beneficial.
@@ -87,9 +89,14 @@ pub fn select_engine_from_hir(hir: &Hir) -> EngineType {
 
     // Small patterns (≤64 character positions) use Shift-Or
     // Shift-Or uses Glushkov NFA (ε-free) for bit-parallel execution
-    // Shift-Or now supports word boundaries (\b) at start and end of pattern
     if is_shift_or_compatible(hir) {
         return EngineType::ShiftOr;
+    }
+
+    // Medium patterns (65-256 character positions) use Wide Shift-Or
+    // Uses [u64; 4] for 256-bit state vectors instead of falling back to PikeVM
+    if is_shift_or_wide_compatible(hir) {
+        return EngineType::ShiftOrWide;
     }
 
     // Word boundaries are now supported by LazyDFA using character-class augmented states.
@@ -171,9 +178,17 @@ mod tests {
     }
 
     #[test]
-    fn test_long_pattern_uses_lazy_dfa() {
-        // Long patterns (>64 positions) should use Lazy DFA
-        let long_pattern = "a".repeat(100);
+    fn test_medium_pattern_uses_shift_or_wide() {
+        // Medium patterns (65-256 positions) should use ShiftOrWide
+        let medium_pattern = "a".repeat(100);
+        let engine = get_engine_from_hir(&medium_pattern);
+        assert_eq!(engine, EngineType::ShiftOrWide);
+    }
+
+    #[test]
+    fn test_very_long_pattern_uses_lazy_dfa() {
+        // Very long patterns (>256 positions) should use Lazy DFA
+        let long_pattern = "a".repeat(300);
         let engine = get_engine_from_hir(&long_pattern);
         assert_eq!(engine, EngineType::LazyDfa);
     }

@@ -27,7 +27,7 @@ pub mod interpreter;
 pub mod jit;
 
 // Re-exports
-pub use shared::{ShiftOr, is_shift_or_compatible};
+pub use shared::{is_shift_or_compatible, is_shift_or_wide_compatible, ShiftOr, ShiftOrWide};
 pub use interpreter::ShiftOrInterpreter;
 pub use engine::ShiftOrEngine;
 
@@ -204,6 +204,106 @@ mod tests {
             let jit = make_jit("xyz").unwrap();
             let result = jit.find(b"abcdef");
             assert!(result.is_none());
+        }
+    }
+
+    mod wide_tests {
+        use super::*;
+
+        fn make_wide(pattern: &str) -> Option<ShiftOrWide> {
+            let ast = parse(pattern).ok()?;
+            let hir = translate(&ast).ok()?;
+            ShiftOrWide::from_hir(&hir)
+        }
+
+        #[test]
+        fn test_wide_100_char_literal() {
+            // 100 characters - should use wide Shift-Or
+            let pattern = "a".repeat(100);
+            let so = make_wide(&pattern).unwrap();
+            assert_eq!(so.state_count(), 100);
+
+            // Build input that matches
+            let input = "a".repeat(100);
+            assert!(so.is_match(input.as_bytes()));
+            assert_eq!(so.find(input.as_bytes()), Some((0, 100)));
+
+            // Input too short - no match
+            let short = "a".repeat(99);
+            assert!(!so.is_match(short.as_bytes()));
+        }
+
+        #[test]
+        fn test_wide_200_char_literal() {
+            // 200 characters - near the upper limit
+            let pattern = "a".repeat(200);
+            let so = make_wide(&pattern).unwrap();
+            assert_eq!(so.state_count(), 200);
+
+            let input = "a".repeat(200);
+            assert!(so.is_match(input.as_bytes()));
+        }
+
+        #[test]
+        fn test_wide_compatibility_check() {
+            // 100 chars is compatible with wide, not with standard
+            let pattern = "a".repeat(100);
+            let ast = parse(&pattern).unwrap();
+            let hir = translate(&ast).unwrap();
+            assert!(!is_shift_or_compatible(&hir)); // Too big for standard
+            assert!(is_shift_or_wide_compatible(&hir)); // Good for wide
+        }
+
+        #[test]
+        fn test_wide_256_boundary() {
+            // 256 chars - at the upper limit
+            let pattern = "a".repeat(256);
+            let so = make_wide(&pattern).unwrap();
+            assert_eq!(so.state_count(), 256);
+
+            // 257 chars - too big even for wide
+            let too_long = "a".repeat(257);
+            let ast = parse(&too_long).unwrap();
+            let hir = translate(&ast).unwrap();
+            assert!(!is_shift_or_wide_compatible(&hir));
+        }
+
+        #[test]
+        fn test_wide_with_alternation() {
+            // Pattern with alternation: 70 chars total
+            let pattern = format!("{}|{}", "a".repeat(35), "b".repeat(35));
+            let so = make_wide(&pattern).unwrap();
+            assert_eq!(so.state_count(), 70);
+
+            let input_a = "a".repeat(35);
+            let input_b = "b".repeat(35);
+            assert!(so.is_match(input_a.as_bytes()));
+            assert!(so.is_match(input_b.as_bytes()));
+            assert!(!so.is_match(b"ccc"));
+        }
+
+        #[test]
+        fn test_wide_with_dot_star() {
+            // 80 chars with dot-star in between
+            let pattern = format!("{}.*{}", "a".repeat(40), "b".repeat(40));
+            let so = make_wide(&pattern).unwrap();
+
+            let input = format!("{}xyz{}", "a".repeat(40), "b".repeat(40));
+            assert!(so.is_match(input.as_bytes()));
+        }
+
+        #[test]
+        fn test_wide_find_position() {
+            let pattern = "a".repeat(100);
+            let so = make_wide(&pattern).unwrap();
+
+            // Match at the start
+            let input = format!("{}", "a".repeat(100));
+            assert_eq!(so.find(input.as_bytes()), Some((0, 100)));
+
+            // Match after prefix
+            let input = format!("xyz{}", "a".repeat(100));
+            assert_eq!(so.find(input.as_bytes()), Some((3, 103)));
         }
     }
 }

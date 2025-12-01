@@ -11,7 +11,7 @@ use crate::hir::Hir;
 use crate::literal::{extract_literals, Prefilter};
 use crate::nfa::{self, Nfa};
 use crate::nfa::tagged::TaggedNfaEngine;
-use crate::vm::{BacktrackingVm, CodepointClassMatcher, PikeVm, PikeVmContext, ShiftOr};
+use crate::vm::{BacktrackingVm, CodepointClassMatcher, PikeVm, PikeVmContext, ShiftOr, ShiftOrWide};
 
 #[cfg(all(feature = "jit", target_arch = "x86_64"))]
 use crate::jit;
@@ -59,6 +59,9 @@ impl std::fmt::Debug for CompiledRegex {
 enum CompiledInner {
     PikeVm(PikeVm),
     ShiftOr(ShiftOr),
+    /// Wide Shift-Or for patterns with 65-256 positions.
+    /// Uses [u64; 4] for 256-bit state vectors.
+    ShiftOrWide(ShiftOrWide),
     LazyDfa(RwLock<LazyDfa>),
     /// Pre-materialized DFA for fast matching without JIT.
     /// Used for patterns that benefit from eager state computation.
@@ -94,6 +97,7 @@ impl CompiledRegex {
         match &self.inner {
             CompiledInner::PikeVm(_) => "PikeVm",
             CompiledInner::ShiftOr(_) => "ShiftOr",
+            CompiledInner::ShiftOrWide(_) => "ShiftOrWide",
             CompiledInner::LazyDfa(_) => "LazyDfa",
             CompiledInner::EagerDfa(_) => "EagerDfa",
             CompiledInner::CodepointClass(_) => "CodepointClass",
@@ -146,6 +150,7 @@ impl CompiledRegex {
         match &self.inner {
             CompiledInner::PikeVm(vm) => vm.is_match(input),
             CompiledInner::ShiftOr(so) => so.is_match(input),
+            CompiledInner::ShiftOrWide(so) => so.is_match(input),
             CompiledInner::LazyDfa(dfa) => {
                 dfa.write().unwrap().find(input).is_some()
             }
@@ -239,6 +244,7 @@ impl CompiledRegex {
         match &self.inner {
             CompiledInner::PikeVm(vm) => vm.find(input),
             CompiledInner::ShiftOr(so) => so.find(input),
+            CompiledInner::ShiftOrWide(so) => so.find(input),
             CompiledInner::LazyDfa(dfa) => {
                 dfa.write().unwrap().find(input)
             }
@@ -315,7 +321,7 @@ impl CompiledRegex {
                         caps
                     })
             }
-            CompiledInner::ShiftOr(_) | CompiledInner::LazyDfa(_) | CompiledInner::EagerDfa(_) => {
+            CompiledInner::ShiftOr(_) | CompiledInner::ShiftOrWide(_) | CompiledInner::LazyDfa(_) | CompiledInner::EagerDfa(_) => {
                 // Fast path: if we have BacktrackingVm, use it for single-pass capture extraction
                 if let Some(ref backtracking_vm) = self.backtracking_vm {
                     return backtracking_vm.captures(input);
@@ -393,6 +399,7 @@ impl CompiledRegex {
         match &self.inner {
             CompiledInner::PikeVm(vm) => vm.find_at(input, pos),
             CompiledInner::ShiftOr(so) => so.try_match_at(input, pos),
+            CompiledInner::ShiftOrWide(so) => so.try_match_at(input, pos),
             CompiledInner::LazyDfa(dfa) => {
                 dfa.write().unwrap().find_at(input, pos).map(|end| (pos, end))
             }
@@ -445,7 +452,7 @@ pub fn compile(nfa: Nfa) -> Result<CompiledRegex> {
             // Fall back to PikeVm which also handles backrefs
             (CompiledInner::PikeVm(PikeVm::new(nfa)), None)
         }
-        EngineType::ShiftOr => {
+        EngineType::ShiftOr | EngineType::ShiftOrWide => {
             // NFA-based compilation can't use Shift-Or (needs Glushkov from HIR)
             // Fall back to LazyDfa, keep NFA for captures
             let capture_nfa = Some(nfa.clone());
@@ -548,6 +555,22 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
                 Some(so) => {
                     let capture_nfa = nfa::compile(hir)?;
                     (CompiledInner::ShiftOr(so), Some(capture_nfa))
+                }
+                None => {
+                    // Fall back to LazyDfa
+                    let nfa = nfa::compile(hir)?;
+                    let capture_nfa = Some(nfa.clone());
+                    (CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))), capture_nfa)
+                }
+            }
+        }
+        EngineType::ShiftOrWide => {
+            // Use Wide Glushkov NFA for ShiftOrWide (65-256 positions)
+            // Keep Thompson NFA for captures (two-pass strategy)
+            match ShiftOrWide::from_hir(hir) {
+                Some(so) => {
+                    let capture_nfa = nfa::compile(hir)?;
+                    (CompiledInner::ShiftOrWide(so), Some(capture_nfa))
                 }
                 None => {
                     // Fall back to LazyDfa

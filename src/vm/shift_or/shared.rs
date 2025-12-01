@@ -3,7 +3,10 @@
 //! Contains the ShiftOr data structure used by both interpreter and JIT.
 
 use crate::hir::Hir;
-use crate::nfa::{compile_glushkov, GlushkovNfa, MAX_POSITIONS};
+use crate::nfa::{
+    compile_glushkov, compile_glushkov_wide, BitSet256, GlushkovNfa, GlushkovWideNfa,
+    MAX_POSITIONS, MAX_POSITIONS_WIDE,
+};
 
 /// A compiled Shift-Or pattern.
 ///
@@ -281,5 +284,211 @@ pub fn is_shift_or_compatible(hir: &Hir) -> bool {
     // Try to build Glushkov NFA to check position count
     compile_glushkov(hir)
         .map(|nfa| nfa.position_count <= MAX_POSITIONS && nfa.position_count > 0)
+        .unwrap_or(false)
+}
+
+// ============================================================================
+// Wide Shift-Or (supports up to 256 positions)
+// ============================================================================
+
+/// A compiled Wide Shift-Or pattern supporting up to 256 positions.
+///
+/// Uses `[u64; 4]` (BitSet256) for state vectors instead of `u64`,
+/// allowing patterns with 65-256 character positions to use the efficient
+/// bit-parallel Shift-Or algorithm instead of falling back to PikeVM.
+///
+/// Performance notes:
+/// - For patterns with ≤64 positions, use `ShiftOr` (faster due to single u64)
+/// - For patterns with 65-256 positions, use `ShiftOrWide`
+/// - For patterns with >256 positions, use LazyDFA or PikeVM
+#[derive(Debug)]
+pub struct ShiftOrWide {
+    /// Bit masks for each byte value (256-bit wide).
+    pub(crate) masks: Box<[BitSet256; 256]>,
+    /// Accept state mask (inverted: 0 bits = accepting positions).
+    pub(crate) accept: BitSet256,
+    /// First set: positions that can start a match.
+    pub(crate) first: BitSet256,
+    /// Follow sets: follow[i] indicates which positions can follow position i.
+    pub(crate) follow: Vec<BitSet256>,
+    /// Whether the pattern can match empty string.
+    pub(crate) nullable: bool,
+    /// Number of positions.
+    pub(crate) position_count: usize,
+}
+
+impl ShiftOrWide {
+    /// Tries to compile an HIR into a Wide Shift-Or matcher.
+    /// Returns None if the pattern is not suitable.
+    pub fn from_hir(hir: &Hir) -> Option<Self> {
+        // Skip patterns with special features that can't be handled
+        if hir.props.has_backrefs
+            || hir.props.has_lookaround
+            || hir.props.has_anchors
+            || hir.props.has_word_boundary
+            || hir.props.has_non_greedy
+        {
+            return None;
+        }
+
+        // Build Wide Glushkov NFA
+        let glushkov = compile_glushkov_wide(hir)?;
+
+        Self::from_glushkov(&glushkov)
+    }
+
+    /// Creates a Wide Shift-Or matcher from a Wide Glushkov NFA.
+    pub fn from_glushkov(nfa: &GlushkovWideNfa) -> Option<Self> {
+        if nfa.position_count > MAX_POSITIONS_WIDE || nfa.position_count == 0 {
+            return None;
+        }
+
+        let masks = Box::new(nfa.build_shift_or_masks());
+        let accept = nfa.build_accept_mask();
+
+        Some(Self {
+            masks,
+            accept,
+            first: nfa.first,
+            follow: nfa.follow.clone(),
+            nullable: nfa.nullable,
+            position_count: nfa.position_count,
+        })
+    }
+
+    /// Returns the number of positions.
+    pub fn state_count(&self) -> usize {
+        self.position_count
+    }
+
+    /// Returns whether the pattern is nullable.
+    pub fn is_nullable(&self) -> bool {
+        self.nullable
+    }
+
+    // ========================================================================
+    // Convenience matching methods (delegate to interpreter)
+    // ========================================================================
+
+    /// Returns true if the pattern matches anywhere in the input.
+    pub fn is_match(&self, input: &[u8]) -> bool {
+        self.find(input).is_some()
+    }
+
+    /// Finds the first match, returning (start, end).
+    pub fn find(&self, input: &[u8]) -> Option<(usize, usize)> {
+        if self.nullable {
+            return Some((0, 0));
+        }
+
+        for start in 0..=input.len() {
+            if let Some(end) = self.match_at(input, start) {
+                return Some((start, end));
+            }
+        }
+        None
+    }
+
+    /// Finds a match starting at or after the given position.
+    pub fn find_at(&self, input: &[u8], pos: usize) -> Option<(usize, usize)> {
+        if pos > input.len() {
+            return None;
+        }
+
+        for start in pos..=input.len() {
+            if let Some(end) = self.match_at(input, start) {
+                return Some((start, end));
+            }
+        }
+        None
+    }
+
+    /// Tries to match at exactly the given position.
+    pub fn try_match_at(&self, input: &[u8], pos: usize) -> Option<(usize, usize)> {
+        self.match_at(input, pos).map(|end| (pos, end))
+    }
+
+    /// Core matching logic using 256-bit state vectors.
+    fn match_at(&self, input: &[u8], start: usize) -> Option<usize> {
+        if start > input.len() {
+            return None;
+        }
+
+        let mut last_match = None;
+
+        if self.nullable {
+            last_match = Some(start);
+        }
+
+        // State tracking using inverted logic (same as u64 version):
+        // - bit i = 0 means we've reached position i (active)
+        // - bit i = 1 means we haven't reached position i (inactive)
+        let mut state = BitSet256::all_ones();
+
+        for (i, &byte) in input[start..].iter().enumerate() {
+            let byte_mask = self.masks[byte as usize];
+
+            if i == 0 {
+                // First byte: can only start at positions in First set
+                state = self.first.complement().union(byte_mask);
+            } else {
+                // Subsequent bytes: use follow sets for transitions
+                // Flip state: 1 = active, 0 = inactive
+                let active = state.complement();
+
+                // Compute union of follow sets for all active positions
+                let mut reachable = BitSet256::empty();
+
+                // Iterate over all 4 words to find active positions
+                for word_idx in 0..4 {
+                    let mut word = active.parts[word_idx];
+                    while word != 0 {
+                        let bit_idx = word.trailing_zeros() as usize;
+                        let pos = word_idx * 64 + bit_idx;
+                        if pos < self.follow.len() {
+                            reachable.union_assign(self.follow[pos]);
+                        }
+                        word &= word - 1; // Clear lowest set bit
+                    }
+                }
+
+                // Invert back to Shift-Or convention (0 = active)
+                // Then apply byte mask
+                state = reachable.complement().union(byte_mask);
+            }
+
+            // Check for match: if any accepting position is reached (bit is 0)
+            if !state.union(self.accept).is_all_ones() {
+                last_match = Some(start + i + 1);
+            }
+
+            // If all bits are 1, no possible match from this starting point
+            if state.is_all_ones() {
+                break;
+            }
+        }
+
+        last_match
+    }
+}
+
+/// Checks if an HIR is suitable for Wide Shift-Or (65-256 positions).
+pub fn is_shift_or_wide_compatible(hir: &Hir) -> bool {
+    if hir.props.has_backrefs
+        || hir.props.has_lookaround
+        || hir.props.has_anchors
+        || hir.props.has_word_boundary
+        || hir.props.has_non_greedy
+    {
+        return false;
+    }
+
+    // Try to build Wide Glushkov NFA to check position count
+    compile_glushkov_wide(hir)
+        .map(|nfa| {
+            nfa.position_count > MAX_POSITIONS
+                && nfa.position_count <= MAX_POSITIONS_WIDE
+                && nfa.position_count > 0
+        })
         .unwrap_or(false)
 }

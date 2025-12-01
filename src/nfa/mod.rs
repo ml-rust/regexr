@@ -19,7 +19,10 @@ mod thompson;
 pub mod utf8_automata;
 pub mod tagged;
 
-pub use glushkov::*;
+pub use glushkov::{
+    compile_glushkov, compile_glushkov_wide, BitSet256, BitSet256Iter, ByteSet, GlushkovNfa,
+    GlushkovWideNfa, MAX_POSITIONS, MAX_POSITIONS_WIDE,
+};
 pub use state::*;
 pub use thompson::*;
 
