@@ -69,6 +69,7 @@ impl StepInterpreter {
                     if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
                         return None;
                     }
+                    let min_pos = pos + 1;
                     pos += 1;
                     // Match as many as possible
                     while pos < input.len() {
@@ -78,8 +79,22 @@ impl StepInterpreter {
                         }
                         pos += 1;
                     }
+                    // Try to match remaining steps, backtracking if needed
+                    let remaining_steps = &steps[step_idx + 1..];
+                    if !remaining_steps.is_empty() {
+                        loop {
+                            if let Some(end) = Self::match_steps(remaining_steps, input, pos) {
+                                return Some(end);
+                            }
+                            if pos <= min_pos {
+                                return None; // Can't backtrack more
+                            }
+                            pos -= 1; // Backtrack one byte
+                        }
+                    }
                 }
                 PatternStep::GreedyStar(ranges) => {
+                    let min_pos = pos; // Can backtrack to zero matches
                     // Match as many as possible (zero or more)
                     while pos < input.len() {
                         let byte = input[pos];
@@ -87,6 +102,19 @@ impl StepInterpreter {
                             break;
                         }
                         pos += 1;
+                    }
+                    // Try to match remaining steps, backtracking if needed
+                    let remaining_steps = &steps[step_idx + 1..];
+                    if !remaining_steps.is_empty() {
+                        loop {
+                            if let Some(end) = Self::match_steps(remaining_steps, input, pos) {
+                                return Some(end);
+                            }
+                            if pos <= min_pos {
+                                return None; // Can't backtrack more
+                            }
+                            pos -= 1; // Backtrack one byte
+                        }
                     }
                 }
                 PatternStep::GreedyPlusLookahead(ranges, lookahead_steps, is_positive) => {
@@ -212,12 +240,26 @@ impl StepInterpreter {
                     } else {
                         return None;
                     }
+                    // Track character boundaries for backtracking
+                    let mut boundaries = vec![pos]; // After first match
                     // Match as many as possible
                     while let Some((cp, len)) = Self::decode_utf8(input, pos) {
                         if !cpclass.contains(cp) {
                             break;
                         }
                         pos += len;
+                        boundaries.push(pos);
+                    }
+                    // Try to match remaining steps, backtracking if needed
+                    let remaining_steps = &steps[step_idx + 1..];
+                    if !remaining_steps.is_empty() {
+                        // Backtrack from longest match to shortest
+                        for &boundary in boundaries.iter().rev() {
+                            if let Some(end) = Self::match_steps(remaining_steps, input, boundary) {
+                                return Some(end);
+                            }
+                        }
+                        return None;
                     }
                 }
                 PatternStep::Alt(alternatives) => {
