@@ -1004,6 +1004,35 @@ impl TaggedNfaJitCompiler {
     ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
 
+        // Optimize for `.*X` patterns in lookahead - use O(n) scan instead of O(n^2) backtracking
+        // For `\w+(?=.*\d)`, we first match `\w+`, then scan for ANY `\d` in the remaining text
+        if lookahead_steps.len() == 2 {
+            if let PatternStep::GreedyStar(star_ranges) = &lookahead_steps[0] {
+                match &lookahead_steps[1] {
+                    PatternStep::Ranges(final_ranges) => {
+                        return self.emit_greedy_plus_with_star_scan_lookahead(
+                            ranges,
+                            star_ranges,
+                            final_ranges,
+                            is_positive,
+                            fail_label,
+                        );
+                    }
+                    PatternStep::Byte(byte) => {
+                        let final_ranges = vec![ByteRange { start: *byte, end: *byte }];
+                        return self.emit_greedy_plus_with_star_scan_lookahead(
+                            ranges,
+                            star_ranges,
+                            &final_ranges,
+                            is_positive,
+                            fail_label,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let greedy_loop = self.asm.new_dynamic_label();
         let greedy_done = self.asm.new_dynamic_label();
         let try_lookahead = self.asm.new_dynamic_label();
@@ -1135,6 +1164,140 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
+    /// Emits optimized greedy+ with `.*X` lookahead pattern.
+    ///
+    /// For `\w+(?=.*\d)`:
+    /// 1. Match at least one word char (greedy+)
+    /// 2. Scan from current position for ANY digit (instead of backtracking)
+    ///
+    /// This is O(n) instead of O(n^2) because we don't need to backtrack the
+    /// greedy+ - we just need to verify that a digit exists somewhere ahead.
+    fn emit_greedy_plus_with_star_scan_lookahead(
+        &mut self,
+        ranges: &[ByteRange],
+        star_ranges: &[ByteRange],
+        final_ranges: &[ByteRange],
+        is_positive: bool,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        let greedy_loop = self.asm.new_dynamic_label();
+        let greedy_done = self.asm.new_dynamic_label();
+        let success = self.asm.new_dynamic_label();
+        let star_loop = self.asm.new_dynamic_label();
+        let star_done = self.asm.new_dynamic_label();
+        let scan_loop = self.asm.new_dynamic_label();
+        let scan_done = self.asm.new_dynamic_label();
+        let found_match = self.asm.new_dynamic_label();
+
+        // Must match at least one character (greedy plus)
+        dynasm!(self.asm
+            ; cmp r14, r12
+            ; jge =>fail_label             // No input available
+            ; movzx eax, BYTE [rbx + r14]
+        );
+        self.emit_range_check(ranges, fail_label)?;
+        dynasm!(self.asm
+            ; inc r14                      // Consumed first byte
+
+            // Greedy loop: consume as many as possible
+            ; =>greedy_loop
+            ; cmp r14, r12
+            ; jge =>greedy_done            // End of input
+            ; movzx eax, BYTE [rbx + r14]
+        );
+        self.emit_range_check(ranges, greedy_done)?;
+        dynasm!(self.asm
+            ; inc r14
+            ; jmp =>greedy_loop
+
+            ; =>greedy_done
+            // r14 = position after greedy consumption
+            // Now check the lookahead using O(n) scan
+        );
+
+        // Step 1: Find star_end - the extent of where `.*` can match to
+        // r9 starts at r14 (position after greedy+), then we scan forward while star_ranges match
+        dynasm!(self.asm
+            ; mov r9, r14                  // r9 = star_end, starts at current pos
+
+            ; =>star_loop
+            ; cmp r9, r12
+            ; jge =>star_done              // End of input
+            ; movzx eax, BYTE [rbx + r9]
+        );
+
+        // Check if byte matches star_ranges (e.g., for `.*`, this excludes newline)
+        self.emit_range_check(star_ranges, star_done)?;
+
+        dynasm!(self.asm
+            ; inc r9                       // Matched, advance star_end
+            ; jmp =>star_loop
+
+            ; =>star_done
+            // r9 = star_end (exclusive - position past all star matches)
+        );
+
+        // Step 2: Scan from r14 to r9 looking for ANY match of final_ranges
+        // r10 = scan position
+        dynasm!(self.asm
+            ; mov r10, r14                 // r10 = scan position, starts at current pos
+
+            ; =>scan_loop
+            ; cmp r10, r9
+            ; jg =>scan_done               // Scanned past star_end
+            ; cmp r10, r12
+            ; jge =>scan_done              // End of input
+
+            ; movzx eax, BYTE [rbx + r10]
+        );
+
+        // Check if byte matches final_ranges (e.g., `\d`)
+        let check_next = self.asm.new_dynamic_label();
+        self.emit_range_check(final_ranges, check_next)?;
+
+        // If we reach here, final_ranges matched!
+        dynasm!(self.asm
+            ; jmp =>found_match
+
+            ; =>check_next
+            ; inc r10                      // Not a match, try next position
+            ; jmp =>scan_loop
+
+            ; =>scan_done
+            // Scanned entire range without finding a match
+        );
+
+        // Determine success/failure based on positive/negative lookahead
+        if is_positive {
+            // Positive lookahead: we need to find a match
+            dynasm!(self.asm
+                ; jmp =>fail_label         // No match found -> fail
+
+                ; =>found_match
+                // Match found, lookahead succeeds
+                // r14 is already at the correct position after greedy+
+                ; jmp =>success
+            );
+        } else {
+            // Negative lookahead: we need to NOT find a match
+            dynasm!(self.asm
+                ; jmp =>success            // No match found -> success
+
+                ; =>found_match
+                ; jmp =>fail_label         // Match found -> fail
+            );
+        }
+
+        dynasm!(self.asm
+            ; =>success
+            // r14 unchanged from greedy+ position (lookahead is zero-width)
+        );
+
+        Ok(())
+    }
+
     /// Emits greedy zero-or-more with lookahead: greedily consumes, then backtracks.
     /// Similar to plus version but minimum position is start (0 matches allowed).
     fn emit_greedy_star_with_lookahead(
@@ -1145,6 +1308,34 @@ impl TaggedNfaJitCompiler {
         fail_label: dynasmrt::DynamicLabel,
     ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
+
+        // Optimize for `.*X` patterns in lookahead - use O(n) scan instead of O(n^2) backtracking
+        if lookahead_steps.len() == 2 {
+            if let PatternStep::GreedyStar(star_ranges) = &lookahead_steps[0] {
+                match &lookahead_steps[1] {
+                    PatternStep::Ranges(final_ranges) => {
+                        return self.emit_greedy_star_with_star_scan_lookahead(
+                            ranges,
+                            star_ranges,
+                            final_ranges,
+                            is_positive,
+                            fail_label,
+                        );
+                    }
+                    PatternStep::Byte(byte) => {
+                        let final_ranges = vec![ByteRange { start: *byte, end: *byte }];
+                        return self.emit_greedy_star_with_star_scan_lookahead(
+                            ranges,
+                            star_ranges,
+                            &final_ranges,
+                            is_positive,
+                            fail_label,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         let greedy_loop = self.asm.new_dynamic_label();
         let greedy_done = self.asm.new_dynamic_label();
@@ -1262,6 +1453,116 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
+    /// Emits optimized greedy* with `.*X` lookahead pattern.
+    ///
+    /// For `\w*(?=.*\d)`:
+    /// 1. Match zero or more word chars (greedy*)
+    /// 2. Scan from current position for ANY digit (instead of backtracking)
+    fn emit_greedy_star_with_star_scan_lookahead(
+        &mut self,
+        ranges: &[ByteRange],
+        star_ranges: &[ByteRange],
+        final_ranges: &[ByteRange],
+        is_positive: bool,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        let greedy_loop = self.asm.new_dynamic_label();
+        let greedy_done = self.asm.new_dynamic_label();
+        let success = self.asm.new_dynamic_label();
+        let star_loop = self.asm.new_dynamic_label();
+        let star_done = self.asm.new_dynamic_label();
+        let scan_loop = self.asm.new_dynamic_label();
+        let scan_done = self.asm.new_dynamic_label();
+        let found_match = self.asm.new_dynamic_label();
+
+        // Greedy star: match zero or more characters
+        dynasm!(self.asm
+            ; =>greedy_loop
+            ; cmp r14, r12
+            ; jge =>greedy_done            // End of input
+            ; movzx eax, BYTE [rbx + r14]
+        );
+        self.emit_range_check(ranges, greedy_done)?;
+        dynasm!(self.asm
+            ; inc r14
+            ; jmp =>greedy_loop
+
+            ; =>greedy_done
+            // r14 = position after greedy consumption
+            // Now check the lookahead using O(n) scan
+        );
+
+        // Step 1: Find star_end - the extent of where `.*` can match to
+        dynasm!(self.asm
+            ; mov r9, r14                  // r9 = star_end, starts at current pos
+
+            ; =>star_loop
+            ; cmp r9, r12
+            ; jge =>star_done              // End of input
+            ; movzx eax, BYTE [rbx + r9]
+        );
+
+        self.emit_range_check(star_ranges, star_done)?;
+
+        dynasm!(self.asm
+            ; inc r9
+            ; jmp =>star_loop
+
+            ; =>star_done
+            // r9 = star_end
+        );
+
+        // Step 2: Scan from r14 to r9 looking for ANY match of final_ranges
+        dynasm!(self.asm
+            ; mov r10, r14                 // r10 = scan position
+
+            ; =>scan_loop
+            ; cmp r10, r9
+            ; jg =>scan_done
+            ; cmp r10, r12
+            ; jge =>scan_done
+
+            ; movzx eax, BYTE [rbx + r10]
+        );
+
+        let check_next = self.asm.new_dynamic_label();
+        self.emit_range_check(final_ranges, check_next)?;
+
+        dynasm!(self.asm
+            ; jmp =>found_match
+
+            ; =>check_next
+            ; inc r10
+            ; jmp =>scan_loop
+
+            ; =>scan_done
+        );
+
+        if is_positive {
+            dynasm!(self.asm
+                ; jmp =>fail_label
+
+                ; =>found_match
+                ; jmp =>success
+            );
+        } else {
+            dynasm!(self.asm
+                ; jmp =>success
+
+                ; =>found_match
+                ; jmp =>fail_label
+            );
+        }
+
+        dynasm!(self.asm
+            ; =>success
+        );
+
+        Ok(())
+    }
+
     /// Emits standalone lookahead assertion check.
     ///
     /// For positive lookahead (?=...): continues if inner pattern matches, else jumps to fail_label.
@@ -1279,6 +1580,35 @@ impl TaggedNfaJitCompiler {
         positive: bool,
     ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
+
+        // Optimize common case: `.*X` where X is a single step (Ranges or Byte)
+        // For `(?=.*\d)`, we need to check if a match of X exists within the range that `.*` can match
+        // This is much faster than backtracking: O(n) scan vs O(n^2) backtracking
+        if inner_steps.len() == 2 {
+            if let PatternStep::GreedyStar(star_ranges) = &inner_steps[0] {
+                match &inner_steps[1] {
+                    PatternStep::Ranges(final_ranges) => {
+                        return self.emit_lookahead_star_scan(
+                            star_ranges,
+                            final_ranges,
+                            fail_label,
+                            positive,
+                        );
+                    }
+                    PatternStep::Byte(byte) => {
+                        // Convert single byte to a range for uniform handling
+                        let final_ranges = vec![ByteRange { start: *byte, end: *byte }];
+                        return self.emit_lookahead_star_scan(
+                            star_ranges,
+                            &final_ranges,
+                            fail_label,
+                            positive,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         // Save current position (lookahead is zero-width)
         dynasm!(self.asm
@@ -1363,6 +1693,84 @@ impl TaggedNfaJitCompiler {
                         );
                     }
                 }
+                PatternStep::StartOfText => {
+                    if positive {
+                        dynasm!(self.asm
+                            ; test r9, r9
+                            ; jnz =>fail_label
+                        );
+                    } else {
+                        dynasm!(self.asm
+                            ; test r9, r9
+                            ; jnz =>inner_match
+                        );
+                    }
+                }
+                PatternStep::GreedyStar(ranges) => {
+                    // Greedy star in lookahead: match as many as possible
+                    // r9 is advanced through matching characters
+                    let loop_start = self.asm.new_dynamic_label();
+                    let loop_done = self.asm.new_dynamic_label();
+
+                    dynasm!(self.asm
+                        ; =>loop_start
+                        ; cmp r9, r12
+                        ; jge =>loop_done              // End of input - done looping
+                        ; movzx eax, BYTE [rbx + r9]
+                    );
+
+                    // Check if byte matches any range
+                    self.emit_range_check(ranges, loop_done)?;
+
+                    dynasm!(self.asm
+                        ; inc r9                       // Consumed another byte
+                        ; jmp =>loop_start
+                        ; =>loop_done
+                    );
+                    // r9 now points past all matched characters
+                }
+                PatternStep::GreedyPlus(ranges) => {
+                    // Greedy plus in lookahead: match at least one, then as many as possible
+                    // First check we have at least one match
+                    if positive {
+                        dynasm!(self.asm
+                            ; cmp r9, r12
+                            ; jge =>fail_label         // No input - fail
+                            ; movzx eax, BYTE [rbx + r9]
+                        );
+                        self.emit_range_check(ranges, fail_label)?;
+                    } else {
+                        dynasm!(self.asm
+                            ; cmp r9, r12
+                            ; jge =>inner_match        // No input - inner didn't match
+                            ; movzx eax, BYTE [rbx + r9]
+                        );
+                        self.emit_range_check(ranges, inner_match)?;
+                    }
+
+                    dynasm!(self.asm
+                        ; inc r9                       // Consumed first byte
+                    );
+
+                    // Now match as many more as possible (like GreedyStar)
+                    let loop_start = self.asm.new_dynamic_label();
+                    let loop_done = self.asm.new_dynamic_label();
+
+                    dynasm!(self.asm
+                        ; =>loop_start
+                        ; cmp r9, r12
+                        ; jge =>loop_done
+                        ; movzx eax, BYTE [rbx + r9]
+                    );
+
+                    self.emit_range_check(ranges, loop_done)?;
+
+                    dynasm!(self.asm
+                        ; inc r9
+                        ; jmp =>loop_start
+                        ; =>loop_done
+                    );
+                }
                 _ => {
                     // For complex steps in lookahead, fall back to interpreter
                     return Err(Error::new(
@@ -1389,6 +1797,119 @@ impl TaggedNfaJitCompiler {
             ; =>inner_match
         );
         // Position r14 unchanged (zero-width)
+
+        Ok(())
+    }
+
+    /// Emits optimized lookahead code for `.*X` patterns.
+    ///
+    /// For a pattern like `(?=.*\d)`, instead of greedily matching `.*` and then
+    /// checking if `\d` matches at the end (which always fails), we:
+    /// 1. Find the extent of `.*` (star_end = where the star can match to)
+    /// 2. Scan from current position to star_end looking for ANY match of the final pattern
+    ///
+    /// This is O(n) instead of O(n^2) and matches the interpreter's `check_lookahead()` optimization.
+    ///
+    /// Register usage:
+    /// - r14 = current_pos (preserved, lookahead is zero-width)
+    /// - r9 = star_end (where `.*` can extend to)
+    /// - r10 = scan position (iterates from r14 to r9)
+    fn emit_lookahead_star_scan(
+        &mut self,
+        star_ranges: &[ByteRange],
+        final_ranges: &[ByteRange],
+        fail_label: dynasmrt::DynamicLabel,
+        positive: bool,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        let found_match = self.asm.new_dynamic_label();
+        let scan_loop = self.asm.new_dynamic_label();
+        let scan_done = self.asm.new_dynamic_label();
+        let star_loop = self.asm.new_dynamic_label();
+        let star_done = self.asm.new_dynamic_label();
+
+        // Step 1: Find star_end - the extent of where `.*` can match to
+        // r9 starts at r14 (current position), then we scan forward while star_ranges match
+        dynasm!(self.asm
+            ; mov r9, r14                  // r9 = star_end, starts at current pos
+
+            ; =>star_loop
+            ; cmp r9, r12
+            ; jge =>star_done              // End of input
+            ; movzx eax, BYTE [rbx + r9]
+        );
+
+        // Check if byte matches star_ranges (e.g., for `.*`, this excludes newline)
+        self.emit_range_check(star_ranges, star_done)?;
+
+        dynasm!(self.asm
+            ; inc r9                       // Matched, advance star_end
+            ; jmp =>star_loop
+
+            ; =>star_done
+            // r9 = star_end (exclusive - position past all star matches)
+        );
+
+        // Step 2: Scan from r14 to r9 looking for ANY match of final_ranges
+        // r10 = scan position
+        dynasm!(self.asm
+            ; mov r10, r14                 // r10 = scan position, starts at current pos
+
+            ; =>scan_loop
+            ; cmp r10, r9
+            ; jg =>scan_done               // Scanned past star_end (inclusive means <=)
+            ; cmp r10, r12
+            ; jge =>scan_done              // End of input
+
+            ; movzx eax, BYTE [rbx + r10]
+        );
+
+        // Check if byte matches final_ranges (e.g., `\d`)
+        // If it matches, we found it - jump to found_match
+        // If it doesn't match, continue scanning
+        let check_next = self.asm.new_dynamic_label();
+        self.emit_range_check(final_ranges, check_next)?;
+
+        // If we reach here, final_ranges matched!
+        dynasm!(self.asm
+            ; jmp =>found_match
+
+            ; =>check_next
+            ; inc r10                      // Not a match, try next position
+            ; jmp =>scan_loop
+
+            ; =>scan_done
+            // Scanned entire range without finding a match
+        );
+
+        // Determine success/failure based on positive/negative lookahead
+        if positive {
+            // Positive lookahead: we need to find a match
+            // scan_done means we didn't find one -> fail
+            // found_match means we found one -> success (continue)
+            dynasm!(self.asm
+                ; jmp =>fail_label         // No match found -> fail
+
+                ; =>found_match
+                // Match found, positive lookahead succeeds
+                // r14 unchanged (zero-width)
+            );
+        } else {
+            // Negative lookahead: we need to NOT find a match
+            // scan_done means we didn't find one -> success (continue)
+            // found_match means we found one -> fail
+            dynasm!(self.asm
+                ; jmp >neg_success         // No match found -> success
+
+                ; =>found_match
+                ; jmp =>fail_label         // Match found -> fail
+
+                ; neg_success:
+                // No match found, negative lookahead succeeds
+                // r14 unchanged (zero-width)
+            );
+        }
 
         Ok(())
     }
@@ -2548,7 +3069,6 @@ impl TaggedNfaJitCompiler {
     /// Returns empty vec if the inner pattern is too complex for JIT.
     fn extract_lookaround_steps(&self, inner_nfa: &Nfa) -> Vec<PatternStep> {
         // Create a temporary compiler for the inner NFA to extract steps
-        // Note: We only support simple linear patterns in lookarounds for now
         let mut visited = vec![false; inner_nfa.states.len()];
         let mut steps = Vec::new();
         let mut current = inner_nfa.start;
@@ -2565,6 +3085,22 @@ impl TaggedNfaJitCompiler {
                 break;
             }
 
+            // Handle instructions in lookaround
+            if let Some(ref instr) = state.instruction {
+                match instr {
+                    NfaInstruction::WordBoundary => {
+                        steps.push(PatternStep::WordBoundary);
+                    }
+                    NfaInstruction::EndOfText => {
+                        steps.push(PatternStep::EndOfText);
+                    }
+                    NfaInstruction::StartOfText => {
+                        steps.push(PatternStep::StartOfText);
+                    }
+                    _ => return Vec::new(),
+                }
+            }
+
             // Handle byte transitions
             if !state.transitions.is_empty() {
                 let target = state.transitions[0].1;
@@ -2575,6 +3111,33 @@ impl TaggedNfaJitCompiler {
                 let ranges: Vec<ByteRange> = state.transitions.iter()
                     .map(|(r, _)| r.clone())
                     .collect();
+
+                // Check for greedy plus pattern: current -[byte]-> target -[eps]-> current (loop back)
+                //                                              |-> next (exit)
+                let target_state = &inner_nfa.states[target as usize];
+                if target_state.transitions.is_empty() && target_state.epsilon.len() == 2 {
+                    let eps0 = target_state.epsilon[0];
+                    let eps1 = target_state.epsilon[1];
+
+                    // Check if one epsilon leads back to current (greedy loop)
+                    if eps0 == current {
+                        steps.push(PatternStep::GreedyPlus(ranges));
+                        if visited[target as usize] {
+                            return Vec::new();
+                        }
+                        visited[target as usize] = true;
+                        current = eps1; // Continue from exit path
+                        continue;
+                    } else if eps1 == current {
+                        steps.push(PatternStep::GreedyPlus(ranges));
+                        if visited[target as usize] {
+                            return Vec::new();
+                        }
+                        visited[target as usize] = true;
+                        current = eps0; // Continue from exit path
+                        continue;
+                    }
+                }
 
                 if visited[current as usize] {
                     return Vec::new(); // Cycle
@@ -2600,6 +3163,31 @@ impl TaggedNfaJitCompiler {
                 continue;
             }
 
+            // Handle greedy star: two epsilons where one leads to byte transitions
+            // that loop back, and one leads to exit
+            if state.epsilon.len() == 2 && state.transitions.is_empty() {
+                let eps0 = state.epsilon[0];
+                let eps1 = state.epsilon[1];
+
+                // Try to detect: eps0 has transitions that loop, eps1 exits
+                // or vice versa
+                if let Some((ranges, exit_state)) = self.detect_greedy_star_lookaround(inner_nfa, current, eps0, eps1, &visited) {
+                    steps.push(PatternStep::GreedyStar(ranges));
+                    visited[current as usize] = true;
+                    current = exit_state;
+                    continue;
+                }
+                if let Some((ranges, exit_state)) = self.detect_greedy_star_lookaround(inner_nfa, current, eps1, eps0, &visited) {
+                    steps.push(PatternStep::GreedyStar(ranges));
+                    visited[current as usize] = true;
+                    current = exit_state;
+                    continue;
+                }
+
+                // Not a recognized greedy star pattern
+                return Vec::new();
+            }
+
             // Complex structure - not supported
             if !state.epsilon.is_empty() || !state.transitions.is_empty() {
                 return Vec::new();
@@ -2609,6 +3197,71 @@ impl TaggedNfaJitCompiler {
         }
 
         steps
+    }
+
+    /// Detects a greedy star pattern in a lookaround's inner NFA.
+    fn detect_greedy_star_lookaround(
+        &self,
+        inner_nfa: &Nfa,
+        branch_state: StateId,
+        loop_start: StateId,
+        exit_state: StateId,
+        visited: &[bool],
+    ) -> Option<(Vec<ByteRange>, StateId)> {
+        if loop_start as usize >= inner_nfa.states.len() {
+            return None;
+        }
+
+        let loop_state = &inner_nfa.states[loop_start as usize];
+
+        // The loop state should have byte transitions
+        if loop_state.transitions.is_empty() {
+            return None;
+        }
+
+        // All transitions should go to the same target
+        let target = loop_state.transitions[0].1;
+        if !loop_state.transitions.iter().all(|(_, t)| *t == target) {
+            return None;
+        }
+
+        let ranges: Vec<ByteRange> = loop_state.transitions.iter()
+            .map(|(r, _)| r.clone())
+            .collect();
+
+        // The target should have epsilon back to branch_state (completing the loop)
+        let target_state = &inner_nfa.states[target as usize];
+
+        // Simple case: target has single epsilon back to branch_state or loop_start
+        if target_state.epsilon.len() == 1 {
+            let back_to = target_state.epsilon[0];
+            if (back_to == branch_state || back_to == loop_start) && !visited[loop_start as usize] {
+                return Some((ranges, exit_state));
+            }
+        }
+
+        // Alternative: target has two epsilons, one back to branch_state or loop_start
+        if target_state.epsilon.len() == 2 {
+            let eps0 = target_state.epsilon[0];
+            let eps1 = target_state.epsilon[1];
+
+            // Check if one epsilon goes back (to branch_state or loop_start) and one goes forward (to exit)
+            let (back, fwd) = if eps0 == branch_state || eps0 == loop_start {
+                (eps0, eps1)
+            } else if eps1 == branch_state || eps1 == loop_start {
+                (eps1, eps0)
+            } else {
+                return None;
+            };
+            let _ = back; // suppress warning
+
+            // The forward epsilon should lead to the same as exit_state or be exit_state
+            if fwd == exit_state && !visited[loop_start as usize] {
+                return Some((ranges, exit_state));
+            }
+        }
+
+        None
     }
 
     /// Finds the common end state for an alternation starting at `start`.

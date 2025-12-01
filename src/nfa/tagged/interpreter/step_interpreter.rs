@@ -196,40 +196,147 @@ impl StepInterpreter {
     }
 
     /// Checks if the lookahead pattern matches at the given position.
+    /// Uses backtracking for greedy quantifiers followed by other patterns.
     fn check_lookahead(steps: &[PatternStep], input: &[u8], pos: usize) -> bool {
-        let mut p = pos;
-        for step in steps {
-            match step {
-                PatternStep::Byte(b) => {
-                    if p >= input.len() || input[p] != *b {
-                        return false;
+        // Optimize common case: `.*X` where X is a character class or byte
+        // For `(?=.*\d)`, we need to check if a digit exists within the range that `.*` can match
+        if steps.len() == 2 {
+            if let PatternStep::GreedyStar(star_ranges) = &steps[0] {
+                // Find the extent of `.*` - it matches characters in star_ranges
+                // For standard `.*`, star_ranges excludes newline (0x0a)
+                let mut star_end = pos;
+                while star_end < input.len() {
+                    let byte = input[star_end];
+                    if !star_ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                        break;
                     }
-                    p += 1;
+                    star_end += 1;
                 }
-                PatternStep::Ranges(ranges) => {
-                    if p >= input.len() {
+
+                // Now check if the final step matches anywhere from pos to star_end
+                match &steps[1] {
+                    PatternStep::Ranges(final_ranges) => {
+                        for p in pos..=star_end {
+                            if p >= input.len() {
+                                break;
+                            }
+                            let byte = input[p];
+                            if final_ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                                return true;
+                            }
+                        }
                         return false;
                     }
-                    let byte = input[p];
-                    if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                    PatternStep::Byte(b) => {
+                        for p in pos..=star_end {
+                            if p >= input.len() {
+                                break;
+                            }
+                            if input[p] == *b {
+                                return true;
+                            }
+                        }
                         return false;
                     }
-                    p += 1;
+                    _ => {}
                 }
-                PatternStep::WordBoundary => {
-                    if !Self::is_word_boundary(input, p) {
-                        return false;
-                    }
-                }
-                PatternStep::EndOfText => {
-                    if p != input.len() {
-                        return false;
-                    }
-                }
-                _ => return false,
             }
         }
-        true
+
+        // General case: use recursive backtracking
+        Self::check_lookahead_recursive(steps, input, pos)
+    }
+
+    /// Recursive backtracking lookahead checker.
+    fn check_lookahead_recursive(steps: &[PatternStep], input: &[u8], pos: usize) -> bool {
+        if steps.is_empty() {
+            return true;
+        }
+
+        let step = &steps[0];
+        let rest = &steps[1..];
+
+        match step {
+            PatternStep::Byte(b) => {
+                if pos >= input.len() || input[pos] != *b {
+                    return false;
+                }
+                Self::check_lookahead_recursive(rest, input, pos + 1)
+            }
+            PatternStep::Ranges(ranges) => {
+                if pos >= input.len() {
+                    return false;
+                }
+                let byte = input[pos];
+                if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                    return false;
+                }
+                Self::check_lookahead_recursive(rest, input, pos + 1)
+            }
+            PatternStep::GreedyPlus(ranges) => {
+                // Must match at least one
+                if pos >= input.len() {
+                    return false;
+                }
+                let byte = input[pos];
+                if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                    return false;
+                }
+                // Greedily match as many as possible, then backtrack
+                let mut end = pos + 1;
+                while end < input.len() {
+                    let byte = input[end];
+                    if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                        break;
+                    }
+                    end += 1;
+                }
+                // Backtrack from longest match to shortest (at least 1)
+                for p in (pos + 1..=end).rev() {
+                    if Self::check_lookahead_recursive(rest, input, p) {
+                        return true;
+                    }
+                }
+                false
+            }
+            PatternStep::GreedyStar(ranges) => {
+                // Match as many as possible (zero or more), then backtrack
+                let mut end = pos;
+                while end < input.len() {
+                    let byte = input[end];
+                    if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                        break;
+                    }
+                    end += 1;
+                }
+                // Backtrack from longest match to shortest (including 0)
+                for p in (pos..=end).rev() {
+                    if Self::check_lookahead_recursive(rest, input, p) {
+                        return true;
+                    }
+                }
+                false
+            }
+            PatternStep::WordBoundary => {
+                if !Self::is_word_boundary(input, pos) {
+                    return false;
+                }
+                Self::check_lookahead_recursive(rest, input, pos)
+            }
+            PatternStep::StartOfText => {
+                if pos != 0 {
+                    return false;
+                }
+                Self::check_lookahead_recursive(rest, input, pos)
+            }
+            PatternStep::EndOfText => {
+                if pos != input.len() {
+                    return false;
+                }
+                Self::check_lookahead_recursive(rest, input, pos)
+            }
+            _ => false,
+        }
     }
 
     /// Checks if the lookbehind pattern matches at position `pos` looking backwards.
