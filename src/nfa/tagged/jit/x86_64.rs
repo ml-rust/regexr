@@ -1309,13 +1309,14 @@ impl TaggedNfaJitCompiler {
                 ; jmp =>success
             );
         } else {
-            // Negative lookahead: inner match means assertion fails
+            // Negative lookahead: inner mismatch means assertion succeeds
+            // (we're at lookahead_inner_mismatch here, so inner pattern didn't match)
             dynasm!(self.asm
                 ; mov r14, r10             // Restore position
-                ; jmp =>lookahead_failed   // Inner matched = neg lookahead fails
+                ; jmp =>success            // Inner didn't match = neg lookahead succeeds
                 ; =>lookahead_inner_match
                 ; mov r14, r10             // Restore position
-                ; jmp =>success            // Inner didn't match = neg lookahead succeeds
+                ; jmp =>lookahead_failed   // Inner matched = neg lookahead fails -> backtrack
             );
         }
 
@@ -1794,13 +1795,14 @@ impl TaggedNfaJitCompiler {
                 ; jmp =>success
             );
         } else {
-            // Negative lookahead: inner match means assertion fails
+            // Negative lookahead: inner mismatch means assertion succeeds
+            // (we're at lookahead_inner_mismatch here, so inner pattern didn't match)
             dynasm!(self.asm
                 ; mov r14, r10             // Restore position
-                ; jmp =>lookahead_failed   // Inner matched = neg lookahead fails
+                ; jmp =>success            // Inner didn't match = neg lookahead succeeds
                 ; =>lookahead_inner_match
                 ; mov r14, r10             // Restore position
-                ; jmp =>success            // Inner didn't match = neg lookahead succeeds
+                ; jmp =>lookahead_failed   // Inner matched = neg lookahead fails -> backtrack
             );
         }
 
@@ -2077,6 +2079,7 @@ impl TaggedNfaJitCompiler {
         );
 
         if is_positive {
+            // Positive lookahead: inner mismatch means assertion fails
             dynasm!(self.asm
                 ; mov r14, r10
                 ; jmp =>lookahead_failed
@@ -2085,12 +2088,13 @@ impl TaggedNfaJitCompiler {
                 ; jmp =>success
             );
         } else {
+            // Negative lookahead: inner mismatch means assertion succeeds
             dynasm!(self.asm
                 ; mov r14, r10
-                ; jmp =>lookahead_failed
+                ; jmp =>success            // Inner didn't match = neg lookahead succeeds
                 ; =>lookahead_inner_match
                 ; mov r14, r10
-                ; jmp =>success
+                ; jmp =>lookahead_failed   // Inner matched = neg lookahead fails -> backtrack
             );
         }
 

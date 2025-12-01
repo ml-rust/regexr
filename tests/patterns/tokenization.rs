@@ -630,3 +630,113 @@ fn test_acronym_detection() {
     assert!(acronyms.contains(&"USA"));
     assert!(acronyms.contains(&"AI"));
 }
+
+// =============================================================================
+// CL100K_BASE Tokenizer Pattern Tests (OpenAI GPT-4/3.5)
+// =============================================================================
+
+/// The actual cl100k_base pattern used by OpenAI's tiktoken tokenizer.
+/// This is a complex pattern with alternations, lookahead, and Unicode properties.
+const CL100K_PATTERN: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
+
+/// Regression test: Negative lookahead with greedy quantifier backtracking.
+/// Issue: `\s+(?!\S)` was not backtracking properly, causing incorrect tokenization.
+///
+/// For "hello   world", the correct tokenization is:
+/// - "hello" (word)
+/// - "  " (2 spaces - matched by `\s+(?!\S)` which stops before the last space)
+/// - " world" (space + word - matched by `[^\r\n\p{L}\p{N}]?\p{L}+`)
+///
+/// The bug was that `\s+` consumed all 3 spaces without backtracking when `(?!\S)` failed.
+#[test]
+fn test_cl100k_whitespace_tokenization() {
+    let re = regex(CL100K_PATTERN);
+
+    // Test: multiple spaces before a word
+    let text = "hello   world";
+    let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+
+    // Expected: ["hello", "  ", " world"]
+    // NOT: ["hello", "   ", "world"]
+    assert_eq!(tokens.len(), 3, "Should have 3 tokens");
+    assert_eq!(tokens[0], "hello", "First token should be 'hello'");
+    assert_eq!(tokens[1], "  ", "Second token should be 2 spaces (not 3)");
+    assert_eq!(tokens[2], " world", "Third token should be ' world' (space + word)");
+}
+
+/// Test whitespace-heavy text tokenization matches expected behavior.
+#[test]
+fn test_cl100k_mixed_whitespace() {
+    let re = regex(CL100K_PATTERN);
+
+    let text = "hello   world\t\ttest\n\n\nmore   text";
+    let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+
+    // Expected tokenization:
+    // "hello", "  ", " world", "\t", "\ttest", "\n\n\n", "more", "  ", " text"
+    assert_eq!(tokens.len(), 9, "Should have 9 tokens");
+    assert_eq!(tokens[0], "hello");
+    assert_eq!(tokens[1], "  ");       // 2 spaces
+    assert_eq!(tokens[2], " world");   // space + word
+    assert_eq!(tokens[3], "\t");       // 1 tab
+    assert_eq!(tokens[4], "\ttest");   // tab + word
+    assert_eq!(tokens[5], "\n\n\n");   // 3 newlines
+    assert_eq!(tokens[6], "more");
+    assert_eq!(tokens[7], "  ");       // 2 spaces
+    assert_eq!(tokens[8], " text");    // space + word
+}
+
+/// Test the isolated negative lookahead pattern for whitespace.
+#[test]
+fn test_whitespace_negative_lookahead_backtracking() {
+    let re = regex(r"\s+(?!\S)");
+
+    // "  w" - 2 spaces followed by 'w' (non-whitespace)
+    // Should match only 1 space (backtrack until (?!\S) succeeds)
+    let text = "  w";
+    let m = re.find(text);
+    assert!(m.is_some(), "Should find a match");
+    assert_eq!(m.unwrap().as_str(), " ", "Should match only 1 space");
+
+    // "   word" - 3 spaces followed by word
+    // Should match 2 spaces (position 2 is still space, so (?!\S) succeeds)
+    let text2 = "   word";
+    let m2 = re.find(text2);
+    assert!(m2.is_some(), "Should find a match");
+    assert_eq!(m2.unwrap().as_str(), "  ", "Should match 2 spaces");
+
+    // "   " - 3 spaces at end (no following character)
+    // Should match all 3 spaces (end of string is not \S)
+    let text3 = "   ";
+    let m3 = re.find(text3);
+    assert!(m3.is_some(), "Should find a match");
+    assert_eq!(m3.unwrap().as_str(), "   ", "Should match all 3 spaces");
+}
+
+/// Test contractions in cl100k pattern.
+#[test]
+fn test_cl100k_contractions() {
+    let re = regex(CL100K_PATTERN);
+
+    let text = "I'm you're they've we'll";
+    let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+
+    // Contractions should be split: word + contraction suffix
+    assert!(tokens.contains(&"'m"), "Should contain 'm");
+    assert!(tokens.contains(&"'re"), "Should contain 're");
+    assert!(tokens.contains(&"'ve"), "Should contain 've");
+    assert!(tokens.contains(&"'ll"), "Should contain 'll");
+}
+
+/// Test number chunking in cl100k pattern.
+#[test]
+fn test_cl100k_numbers() {
+    let re = regex(CL100K_PATTERN);
+
+    // Numbers are split into chunks of 1-3 digits
+    let text = "123456789";
+    let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+
+    // Should be split into 3-digit chunks
+    assert_eq!(tokens, vec!["123", "456", "789"]);
+}
