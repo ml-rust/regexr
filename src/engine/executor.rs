@@ -658,10 +658,59 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
         });
     }
 
-    // 1. Complex Unicode patterns → LazyDfa (skip JIT to avoid state explosion)
-    // LazyDfa handles these well; PikeVM is too slow for large unicode classes.
+    // 1. Complex Unicode patterns with large unicode classes → TaggedNfa JIT
+    // These patterns use CodepointClass instructions which DFA cannot handle.
+    // Route them to TaggedNfa JIT which supports CodepointClass.
+    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
     if hir.props.has_large_unicode_class {
-        return compile_from_hir(hir);
+        let literals = extract_literals(hir);
+        let prefilter = Prefilter::from_literals(&literals);
+        let nfa = nfa::compile(hir)?;
+        match jit::compile_tagged_nfa(&nfa) {
+            Ok(engine) => {
+                return Ok(CompiledRegex {
+                    inner: CompiledInner::TaggedNfaJit(engine),
+                    prefilter,
+                    capture_nfa: RwLock::new(None),
+                    capture_vm: RwLock::new(None),
+                    capture_ctx: RwLock::new(None),
+                    backtracking_vm: None,
+                    backtracking_jit: None,
+                });
+            }
+            Err(_e) => {
+                // TaggedNfa JIT failed - fall back to TaggedNfa interpreter
+                #[cfg(debug_assertions)]
+                eprintln!("[regexr] TaggedNfaJit failed for large unicode class, falling back to interpreter: {}", _e);
+                let engine = TaggedNfaEngine::new(nfa);
+                return Ok(CompiledRegex {
+                    inner: CompiledInner::TaggedNfaInterp(engine),
+                    prefilter,
+                    capture_nfa: RwLock::new(None),
+                    capture_vm: RwLock::new(None),
+                    capture_ctx: RwLock::new(None),
+                    backtracking_vm: None,
+                    backtracking_jit: None,
+                });
+            }
+        }
+    }
+
+    // Non-JIT: Large unicode classes go to TaggedNfa interpreter
+    #[cfg(not(all(feature = "jit", target_arch = "x86_64")))]
+    if hir.props.has_large_unicode_class {
+        let literals = extract_literals(hir);
+        let prefilter = Prefilter::from_literals(&literals);
+        let nfa = nfa::compile(hir)?;
+        let engine = TaggedNfaEngine::new(nfa);
+        return Ok(CompiledRegex {
+            inner: CompiledInner::TaggedNfaInterp(engine),
+            prefilter,
+            capture_nfa: RwLock::new(None),
+            capture_vm: RwLock::new(None),
+            capture_ctx: RwLock::new(None),
+            backtracking_vm: None,
+        });
     }
 
     // 2. Patterns with backreferences → Backtracking JIT (only way to handle backrefs)

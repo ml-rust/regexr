@@ -126,6 +126,7 @@ impl TaggedNfaJitCompiler {
 
         // Large NFAs generate too much code
         if self.nfa.states.len() > 256 {
+            // NFA too large for efficient JIT - fall back to interpreter
             return true;
         }
 
@@ -197,6 +198,76 @@ impl TaggedNfaJitCompiler {
         })
     }
 
+    /// Check if alternation contains unsupported patterns (recursive).
+    fn has_unsupported_in_alt(alternatives: &[Vec<PatternStep>]) -> bool {
+        for alt_steps in alternatives.iter() {
+            for step in alt_steps.iter() {
+                match step {
+                    // Nested alternation - supported via recursive emit
+                    PatternStep::Alt(inner_alts) => {
+                        // Recursively check nested alternation
+                        if Self::has_unsupported_in_alt(inner_alts) {
+                            return true;
+                        }
+                    }
+                    // Non-greedy patterns not supported in alternation JIT
+                    PatternStep::NonGreedyPlus(_, _) |
+                    PatternStep::NonGreedyStar(_, _) => {
+                        return true;
+                    }
+                    // Greedy with lookahead - supported via emit_alt_step
+                    PatternStep::GreedyPlusLookahead(_, _, _) |
+                    PatternStep::GreedyStarLookahead(_, _, _) => {}
+                    // Lookarounds in alternation - not yet supported
+                    PatternStep::PositiveLookahead(_) |
+                    PatternStep::NegativeLookahead(_) |
+                    PatternStep::PositiveLookbehind(_, _) |
+                    PatternStep::NegativeLookbehind(_, _) => {
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if a step consumes input bytes.
+    fn step_consumes_input(step: &PatternStep) -> bool {
+        match step {
+            PatternStep::Byte(_) |
+            PatternStep::Ranges(_) |
+            PatternStep::GreedyPlus(_) |
+            PatternStep::GreedyStar(_) |
+            PatternStep::GreedyCodepointPlus(_) |
+            PatternStep::CodepointClass(_, _) |
+            PatternStep::NonGreedyPlus(_, _) |
+            PatternStep::NonGreedyStar(_, _) |
+            PatternStep::GreedyPlusLookahead(_, _, _) |
+            PatternStep::GreedyStarLookahead(_, _, _) |
+            PatternStep::Backref(_) => true,
+
+            PatternStep::Alt(alternatives) => {
+                // Consumes input if any alternative consumes input
+                alternatives.iter().any(|alt| alt.iter().any(|s| Self::step_consumes_input(s)))
+            }
+
+            // Zero-width assertions don't consume input
+            PatternStep::PositiveLookahead(_) |
+            PatternStep::NegativeLookahead(_) |
+            PatternStep::PositiveLookbehind(_, _) |
+            PatternStep::NegativeLookbehind(_, _) |
+            PatternStep::WordBoundary |
+            PatternStep::NotWordBoundary |
+            PatternStep::StartOfText |
+            PatternStep::EndOfText |
+            PatternStep::StartOfLine |
+            PatternStep::EndOfLine |
+            PatternStep::CaptureStart(_) |
+            PatternStep::CaptureEnd(_) => false,
+        }
+    }
+
     fn compile_full(mut self) -> Result<TaggedNfaJit> {
         use dynasmrt::DynasmLabelApi;
 
@@ -208,6 +279,16 @@ impl TaggedNfaJitCompiler {
         if steps.is_empty() {
             // Empty pattern or couldn't extract - fall back to interpreter
             return self.compile_with_fallback(None);
+        }
+
+        // Check if top-level has unsupported patterns (like nested Alt)
+        // This prevents orphan labels during code generation
+        for step in &steps {
+            if let PatternStep::Alt(alternatives) = step {
+                if Self::has_unsupported_in_alt(alternatives) {
+                    return self.compile_with_fallback(Some(steps));
+                }
+            }
         }
 
         // Standalone lookahead patterns are now fully JIT compiled
@@ -275,7 +356,7 @@ impl TaggedNfaJitCompiler {
         );
 
         // For each step in the pattern, generate matching code
-        for step in steps.iter() {
+        for (step_idx, step) in steps.iter().enumerate() {
             match step {
                 PatternStep::Byte(byte) => {
                     // Check bounds
@@ -301,50 +382,71 @@ impl TaggedNfaJitCompiler {
                     );
                 }
                 PatternStep::GreedyPlus(ranges) => {
-                    // Greedy one-or-more: must match at least once, then keep matching
-                    let loop_start = self.asm.new_dynamic_label();
-                    let loop_done = self.asm.new_dynamic_label();
+                    // Check if there are remaining steps that consume input
+                    let remaining = &steps[step_idx + 1..];
+                    let needs_backtrack = remaining.iter().any(|s| Self::step_consumes_input(s));
 
-                    // First iteration (must match)
-                    dynasm!(self.asm
-                        ; cmp r14, r12
-                        ; jge =>byte_mismatch       // Must have at least one byte
-                        ; movzx eax, BYTE [rbx + r14]
-                    );
-                    self.emit_range_check(ranges, byte_mismatch)?;
-                    dynasm!(self.asm
-                        ; inc r14                   // Consumed first byte
+                    if needs_backtrack {
+                        // Backtracking version: greedily match, then try remaining, backtrack on failure
+                        self.emit_greedy_plus_with_backtracking(ranges, remaining, byte_mismatch)?;
+                        // Remaining steps already handled in backtracking code
+                        break;
+                    } else {
+                        // Simple version: no backtracking needed
+                        let loop_start = self.asm.new_dynamic_label();
+                        let loop_done = self.asm.new_dynamic_label();
 
-                        // Loop for additional matches
-                        ; =>loop_start
-                        ; cmp r14, r12
-                        ; jge =>loop_done           // End of input - done looping
-                        ; movzx eax, BYTE [rbx + r14]
-                    );
-                    self.emit_range_check(ranges, loop_done)?;
-                    dynasm!(self.asm
-                        ; inc r14                   // Consumed another byte
-                        ; jmp =>loop_start
-                        ; =>loop_done
-                    );
+                        // First iteration (must match)
+                        dynasm!(self.asm
+                            ; cmp r14, r12
+                            ; jge =>byte_mismatch       // Must have at least one byte
+                            ; movzx eax, BYTE [rbx + r14]
+                        );
+                        self.emit_range_check(ranges, byte_mismatch)?;
+                        dynasm!(self.asm
+                            ; inc r14                   // Consumed first byte
+
+                            // Loop for additional matches
+                            ; =>loop_start
+                            ; cmp r14, r12
+                            ; jge =>loop_done           // End of input - done looping
+                            ; movzx eax, BYTE [rbx + r14]
+                        );
+                        self.emit_range_check(ranges, loop_done)?;
+                        dynasm!(self.asm
+                            ; inc r14                   // Consumed another byte
+                            ; jmp =>loop_start
+                            ; =>loop_done
+                        );
+                    }
                 }
                 PatternStep::GreedyStar(ranges) => {
-                    // Greedy zero-or-more: keep matching as long as possible
-                    let loop_start = self.asm.new_dynamic_label();
-                    let loop_done = self.asm.new_dynamic_label();
+                    // Check if there are remaining steps that consume input
+                    let remaining = &steps[step_idx + 1..];
+                    let needs_backtrack = remaining.iter().any(|s| Self::step_consumes_input(s));
 
-                    dynasm!(self.asm
-                        ; =>loop_start
-                        ; cmp r14, r12
-                        ; jge =>loop_done           // End of input - done looping
-                        ; movzx eax, BYTE [rbx + r14]
-                    );
-                    self.emit_range_check(ranges, loop_done)?;
-                    dynasm!(self.asm
-                        ; inc r14                   // Consumed a byte
-                        ; jmp =>loop_start
-                        ; =>loop_done
-                    );
+                    if needs_backtrack {
+                        // Backtracking version
+                        self.emit_greedy_star_with_backtracking(ranges, remaining, byte_mismatch)?;
+                        break;
+                    } else {
+                        // Simple version: no backtracking needed
+                        let loop_start = self.asm.new_dynamic_label();
+                        let loop_done = self.asm.new_dynamic_label();
+
+                        dynasm!(self.asm
+                            ; =>loop_start
+                            ; cmp r14, r12
+                            ; jge =>loop_done           // End of input - done looping
+                            ; movzx eax, BYTE [rbx + r14]
+                        );
+                        self.emit_range_check(ranges, loop_done)?;
+                        dynasm!(self.asm
+                            ; inc r14                   // Consumed a byte
+                            ; jmp =>loop_start
+                            ; =>loop_done
+                        );
+                    }
                 }
                 PatternStep::NonGreedyPlus(ranges, suffix) => {
                     // Non-greedy one-or-more: match minimum (1), then try suffix
@@ -433,13 +535,23 @@ impl TaggedNfaJitCompiler {
                     // Capture markers don't consume input - skip in find_fn
                     // (captures are handled separately in captures_fn)
                 }
-                PatternStep::CodepointClass(_, _) => {
-                    // Unicode codepoint classes require helper function - fall back to interpreter for now
-                    return self.compile_with_fallback(None);
+                PatternStep::CodepointClass(cpclass, _target) => {
+                    // Unicode codepoint class - decode UTF-8 and check membership
+                    self.emit_codepoint_class_check(cpclass, byte_mismatch)?;
                 }
-                PatternStep::GreedyCodepointPlus(_) => {
-                    // Greedy codepoint repetition requires UTF-8 decoding - fall back to interpreter
-                    return self.compile_with_fallback(None);
+                PatternStep::GreedyCodepointPlus(cpclass) => {
+                    // Check if there are remaining steps that consume input
+                    let remaining = &steps[step_idx + 1..];
+                    let needs_backtrack = remaining.iter().any(|s| Self::step_consumes_input(s));
+
+                    if needs_backtrack {
+                        // Backtracking version: greedily match UTF-8, then try remaining, backtrack on failure
+                        self.emit_greedy_codepoint_plus_with_backtracking(cpclass, remaining, byte_mismatch)?;
+                        break;
+                    } else {
+                        // Simple version: no backtracking needed
+                        self.emit_greedy_codepoint_plus(cpclass, byte_mismatch)?;
+                    }
                 }
                 PatternStep::WordBoundary => {
                     // Word boundary assertion - doesn't consume input
@@ -513,7 +625,13 @@ impl TaggedNfaJitCompiler {
                     unreachable!("Backref in find_fn should have triggered early return");
                 }
                 PatternStep::Alt(alternatives) => {
-                    // Alternation: try each alternative in order
+                    // Check for nested alternations or unsupported steps before creating labels
+                    // This prevents orphan labels when we fall back to interpreter
+                    if Self::has_unsupported_in_alt(alternatives) {
+                        return self.compile_with_fallback(Some(steps.clone()));
+                    }
+
+                    // Simple alternation: try each alternative in order
                     // Save current position, try each alternative, restore on failure
                     let alt_success = self.asm.new_dynamic_label();
 
@@ -596,20 +714,20 @@ impl TaggedNfaJitCompiler {
                                         ; =>loop_done
                                     );
                                 }
-                                PatternStep::Alt(_) => {
-                                    // Nested alternation - fall back to interpreter
-                                    return self.compile_with_fallback(None);
+                                PatternStep::Alt(inner_alternatives) => {
+                                    // Nested alternation - emit recursively
+                                    self.emit_nested_alt(inner_alternatives, try_next_alt)?;
                                 }
                                 PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_) => {
                                     // Capture markers in alternation - skip in find_fn
                                 }
-                                PatternStep::CodepointClass(_, _) => {
-                                    // Unicode codepoint classes in alternation - fall back to interpreter
-                                    return self.compile_with_fallback(None);
+                                PatternStep::CodepointClass(cpclass, _target) => {
+                                    // Unicode codepoint class in alternation
+                                    self.emit_codepoint_class_check(cpclass, try_next_alt)?;
                                 }
-                                PatternStep::GreedyCodepointPlus(_) => {
-                                    // Greedy codepoint repetition in alternation - fall back to interpreter
-                                    return self.compile_with_fallback(None);
+                                PatternStep::GreedyCodepointPlus(cpclass) => {
+                                    // Greedy codepoint repetition in alternation
+                                    self.emit_greedy_codepoint_plus(cpclass, try_next_alt)?;
                                 }
                                 PatternStep::WordBoundary => {
                                     // Word boundary in alternation - doesn't consume input
@@ -676,9 +794,13 @@ impl TaggedNfaJitCompiler {
                                     // Non-greedy in alternation - complex, fall back to interpreter
                                     return self.compile_with_fallback(None);
                                 }
-                                PatternStep::GreedyPlusLookahead(_, _, _) | PatternStep::GreedyStarLookahead(_, _, _) => {
-                                    // Greedy with lookahead in alternation - complex, fall back
-                                    return self.compile_with_fallback(None);
+                                PatternStep::GreedyPlusLookahead(ranges, lookahead_steps, is_positive) => {
+                                    // Greedy+ with lookahead in alternation
+                                    self.emit_greedy_plus_with_lookahead_in_alt(ranges, lookahead_steps, *is_positive, try_next_alt)?;
+                                }
+                                PatternStep::GreedyStarLookahead(ranges, lookahead_steps, is_positive) => {
+                                    // Greedy* with lookahead in alternation
+                                    self.emit_greedy_star_with_lookahead_in_alt(ranges, lookahead_steps, *is_positive, try_next_alt)?;
                                 }
                             }
                         }
@@ -813,6 +935,530 @@ impl TaggedNfaJitCompiler {
                 ; =>range_matched
             );
         }
+        Ok(())
+    }
+
+    /// Emits code for a nested alternation inside an outer alternation.
+    /// On success, continues to the next instruction.
+    /// On failure of ALL alternatives, jumps to `fail_label`.
+    ///
+    /// This function generates code that saves position to the stack (with proper cleanup)
+    /// for restoring between alternatives.
+    fn emit_nested_alt(
+        &mut self,
+        alternatives: &[Vec<PatternStep>],
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        // For deeply nested alternations, we use the stack with explicit cleanup.
+        // Each alternative that succeeds must pop the saved position.
+        // The last alternative failing pops and jumps to fail_label.
+
+        if alternatives.is_empty() {
+            // Empty alternation - always fails
+            dynasm!(self.asm
+                ; jmp =>fail_label
+            );
+            return Ok(());
+        }
+
+        if alternatives.len() == 1 {
+            // Single alternative - just emit it directly without saving
+            for step in &alternatives[0] {
+                self.emit_alt_step(step, fail_label)?;
+            }
+            return Ok(());
+        }
+
+        let alt_success = self.asm.new_dynamic_label();
+
+        // Save current position on stack
+        dynasm!(self.asm
+            ; push r14                 // Save current position
+        );
+
+        for (alt_idx, alt_steps) in alternatives.iter().enumerate() {
+            let is_last = alt_idx == alternatives.len() - 1;
+
+            // Create label for trying next alternative (or cleanup for last)
+            let try_next_alt = if is_last {
+                // Last alternative - if it fails, we need to clean up and fail
+                let cleanup_label = self.asm.new_dynamic_label();
+                cleanup_label
+            } else {
+                self.asm.new_dynamic_label()
+            };
+
+            // Emit code for each step in this alternative
+            for alt_step in alt_steps.iter() {
+                self.emit_alt_step(alt_step, try_next_alt)?;
+            }
+
+            // This alternative succeeded
+            dynasm!(self.asm
+                ; add rsp, 8           // Pop saved position
+                ; jmp =>alt_success
+            );
+
+            // Define label for trying next alternative
+            dynasm!(self.asm
+                ; =>try_next_alt
+            );
+
+            if is_last {
+                // Cleanup and jump to outer fail
+                dynasm!(self.asm
+                    ; add rsp, 8       // Pop saved position
+                    ; jmp =>fail_label
+                );
+            } else {
+                // Restore position and try next alternative
+                dynasm!(self.asm
+                    ; mov r14, [rsp]   // Restore position (keep on stack for next alt)
+                );
+            }
+        }
+
+        dynasm!(self.asm
+            ; =>alt_success
+        );
+
+        Ok(())
+    }
+
+    /// Emits code for a single step inside an alternation.
+    /// On failure, jumps to `fail_label`.
+    fn emit_alt_step(
+        &mut self,
+        step: &PatternStep,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        match step {
+            PatternStep::Byte(byte) => {
+                dynasm!(self.asm
+                    ; cmp r14, r12
+                    ; jge =>fail_label
+                    ; movzx eax, BYTE [rbx + r14]
+                    ; cmp al, *byte as i8
+                    ; jne =>fail_label
+                    ; inc r14
+                );
+            }
+            PatternStep::Ranges(ranges) => {
+                dynasm!(self.asm
+                    ; cmp r14, r12
+                    ; jge =>fail_label
+                    ; movzx eax, BYTE [rbx + r14]
+                );
+                self.emit_range_check(ranges, fail_label)?;
+                dynasm!(self.asm
+                    ; inc r14
+                );
+            }
+            PatternStep::GreedyPlus(ranges) => {
+                let loop_start = self.asm.new_dynamic_label();
+                let loop_done = self.asm.new_dynamic_label();
+
+                dynasm!(self.asm
+                    ; cmp r14, r12
+                    ; jge =>fail_label
+                    ; movzx eax, BYTE [rbx + r14]
+                );
+                self.emit_range_check(ranges, fail_label)?;
+                dynasm!(self.asm
+                    ; inc r14
+                    ; =>loop_start
+                    ; cmp r14, r12
+                    ; jge =>loop_done
+                    ; movzx eax, BYTE [rbx + r14]
+                );
+                self.emit_range_check(ranges, loop_done)?;
+                dynasm!(self.asm
+                    ; inc r14
+                    ; jmp =>loop_start
+                    ; =>loop_done
+                );
+            }
+            PatternStep::GreedyStar(ranges) => {
+                let loop_start = self.asm.new_dynamic_label();
+                let loop_done = self.asm.new_dynamic_label();
+
+                dynasm!(self.asm
+                    ; =>loop_start
+                    ; cmp r14, r12
+                    ; jge =>loop_done
+                    ; movzx eax, BYTE [rbx + r14]
+                );
+                self.emit_range_check(ranges, loop_done)?;
+                dynasm!(self.asm
+                    ; inc r14
+                    ; jmp =>loop_start
+                    ; =>loop_done
+                );
+            }
+            PatternStep::Alt(inner_alternatives) => {
+                // Nested alternation - recurse
+                self.emit_nested_alt(inner_alternatives, fail_label)?;
+            }
+            PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_) => {
+                // Capture markers - skip in find_fn
+            }
+            PatternStep::CodepointClass(cpclass, _target) => {
+                self.emit_codepoint_class_check(cpclass, fail_label)?;
+            }
+            PatternStep::GreedyCodepointPlus(cpclass) => {
+                self.emit_greedy_codepoint_plus(cpclass, fail_label)?;
+            }
+            PatternStep::WordBoundary => {
+                self.emit_word_boundary_check(fail_label, true)?;
+            }
+            PatternStep::NotWordBoundary => {
+                self.emit_word_boundary_check(fail_label, false)?;
+            }
+            PatternStep::StartOfText => {
+                dynasm!(self.asm
+                    ; test r14, r14
+                    ; jnz =>fail_label
+                );
+            }
+            PatternStep::EndOfText => {
+                dynasm!(self.asm
+                    ; cmp r14, r12
+                    ; jne =>fail_label
+                );
+            }
+            PatternStep::StartOfLine => {
+                let at_start = self.asm.new_dynamic_label();
+                dynasm!(self.asm
+                    ; test r14, r14
+                    ; jz =>at_start
+                    ; mov rax, r14
+                    ; dec rax
+                    ; movzx eax, BYTE [rbx + rax]
+                    ; cmp al, 0x0A
+                    ; jne =>fail_label
+                    ; =>at_start
+                );
+            }
+            PatternStep::EndOfLine => {
+                let at_end = self.asm.new_dynamic_label();
+                dynasm!(self.asm
+                    ; cmp r14, r12
+                    ; je =>at_end
+                    ; movzx eax, BYTE [rbx + r14]
+                    ; cmp al, 0x0A
+                    ; jne =>fail_label
+                    ; =>at_end
+                );
+            }
+            PatternStep::PositiveLookahead(_) |
+            PatternStep::NegativeLookahead(_) |
+            PatternStep::PositiveLookbehind(_, _) |
+            PatternStep::NegativeLookbehind(_, _) => {
+                // Lookarounds in alternation - should have been filtered by has_unsupported_in_alt
+                return Err(Error::new(
+                    ErrorKind::Jit("Lookaround in alternation not yet supported".to_string()),
+                    "",
+                ));
+            }
+            PatternStep::Backref(_) => {
+                // Backrefs in find_fn should have triggered early return
+                return Err(Error::new(
+                    ErrorKind::Jit("Backref in alternation not yet supported in find_fn".to_string()),
+                    "",
+                ));
+            }
+            PatternStep::NonGreedyPlus(_, _) | PatternStep::NonGreedyStar(_, _) => {
+                // Non-greedy in alternation - should have been filtered
+                return Err(Error::new(
+                    ErrorKind::Jit("Non-greedy in alternation not yet supported".to_string()),
+                    "",
+                ));
+            }
+            PatternStep::GreedyPlusLookahead(ranges, lookahead_steps, is_positive) => {
+                // Greedy one-or-more with lookahead in alternation
+                self.emit_greedy_plus_with_lookahead_in_alt(ranges, lookahead_steps, *is_positive, fail_label)?;
+            }
+            PatternStep::GreedyStarLookahead(ranges, lookahead_steps, is_positive) => {
+                // Greedy zero-or-more with lookahead in alternation
+                self.emit_greedy_star_with_lookahead_in_alt(ranges, lookahead_steps, *is_positive, fail_label)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Emits code for greedy+ with lookahead inside an alternation.
+    /// Similar to emit_greedy_plus_with_lookahead but adapted for alternation context.
+    fn emit_greedy_plus_with_lookahead_in_alt(
+        &mut self,
+        ranges: &[ByteRange],
+        lookahead_steps: &[PatternStep],
+        is_positive: bool,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        let greedy_loop = self.asm.new_dynamic_label();
+        let greedy_done = self.asm.new_dynamic_label();
+        let try_lookahead = self.asm.new_dynamic_label();
+        let lookahead_failed = self.asm.new_dynamic_label();
+        let success = self.asm.new_dynamic_label();
+
+        // Must match at least one character (greedy plus)
+        dynasm!(self.asm
+            ; cmp r14, r12
+            ; jge =>fail_label             // No input available
+            ; movzx eax, BYTE [rbx + r14]
+        );
+        self.emit_range_check(ranges, fail_label)?;
+        dynasm!(self.asm
+            ; inc r14                      // Consumed first byte
+            ; mov r9, r14                  // r9 = minimum position (need at least 1 match)
+
+            // Greedy loop: consume as many as possible
+            ; =>greedy_loop
+            ; cmp r14, r12
+            ; jge =>greedy_done            // End of input
+            ; movzx eax, BYTE [rbx + r14]
+        );
+        self.emit_range_check(ranges, greedy_done)?;
+        dynasm!(self.asm
+            ; inc r14
+            ; jmp =>greedy_loop
+
+            ; =>greedy_done
+            // r14 = max position after greedy consumption
+            // Now backtrack until lookahead succeeds
+
+            ; =>try_lookahead
+        );
+
+        // Emit lookahead check inline
+        let lookahead_inner_match = self.asm.new_dynamic_label();
+        let lookahead_inner_mismatch = self.asm.new_dynamic_label();
+
+        dynasm!(self.asm
+            ; mov r10, r14                 // Save position for restoration
+        );
+
+        // Try to match lookahead inner pattern
+        for step in lookahead_steps {
+            match step {
+                PatternStep::Byte(byte) => {
+                    dynasm!(self.asm
+                        ; cmp r14, r12
+                        ; jge =>lookahead_inner_mismatch
+                        ; movzx eax, BYTE [rbx + r14]
+                        ; cmp al, *byte as i8
+                        ; jne =>lookahead_inner_mismatch
+                        ; inc r14
+                    );
+                }
+                PatternStep::Ranges(inner_ranges) => {
+                    dynasm!(self.asm
+                        ; cmp r14, r12
+                        ; jge =>lookahead_inner_mismatch
+                        ; movzx eax, BYTE [rbx + r14]
+                    );
+                    self.emit_range_check(inner_ranges, lookahead_inner_mismatch)?;
+                    dynasm!(self.asm
+                        ; inc r14
+                    );
+                }
+                PatternStep::WordBoundary => {
+                    self.emit_word_boundary_check(lookahead_inner_mismatch, true)?;
+                }
+                PatternStep::NotWordBoundary => {
+                    self.emit_word_boundary_check(lookahead_inner_mismatch, false)?;
+                }
+                PatternStep::EndOfText => {
+                    dynasm!(self.asm
+                        ; cmp r14, r12
+                        ; jne =>lookahead_inner_mismatch
+                    );
+                }
+                PatternStep::StartOfText => {
+                    dynasm!(self.asm
+                        ; test r14, r14
+                        ; jnz =>lookahead_inner_mismatch
+                    );
+                }
+                _ => {
+                    // For other step types in lookahead, we need more complex handling
+                    // For now, just continue (the lookahead check will likely fail)
+                }
+            }
+        }
+
+        // Lookahead inner pattern matched
+        dynasm!(self.asm
+            ; jmp =>lookahead_inner_match
+            ; =>lookahead_inner_mismatch
+        );
+
+        if is_positive {
+            // Positive lookahead failed - try backtracking
+            dynasm!(self.asm
+                ; mov r14, r10             // Restore position
+                ; jmp =>lookahead_failed
+                ; =>lookahead_inner_match
+                ; mov r14, r10             // Restore position (zero-width)
+                ; jmp =>success
+            );
+        } else {
+            // Negative lookahead: inner match means assertion fails
+            dynasm!(self.asm
+                ; mov r14, r10             // Restore position
+                ; jmp =>lookahead_failed   // Inner matched = neg lookahead fails
+                ; =>lookahead_inner_match
+                ; mov r14, r10             // Restore position
+                ; jmp =>success            // Inner didn't match = neg lookahead succeeds
+            );
+        }
+
+        // Lookahead failed - backtrack one position
+        dynasm!(self.asm
+            ; =>lookahead_failed
+            ; dec r14                      // Backtrack one position
+            ; cmp r14, r9
+            ; jl =>fail_label              // Below minimum - overall fail
+            ; jmp =>try_lookahead          // Try lookahead at new position
+
+            ; =>success
+        );
+
+        Ok(())
+    }
+
+    /// Emits code for greedy* with lookahead inside an alternation.
+    fn emit_greedy_star_with_lookahead_in_alt(
+        &mut self,
+        ranges: &[ByteRange],
+        lookahead_steps: &[PatternStep],
+        is_positive: bool,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        let greedy_loop = self.asm.new_dynamic_label();
+        let greedy_done = self.asm.new_dynamic_label();
+        let try_lookahead = self.asm.new_dynamic_label();
+        let lookahead_failed = self.asm.new_dynamic_label();
+        let success = self.asm.new_dynamic_label();
+
+        // Star can match zero - save current position as minimum
+        dynasm!(self.asm
+            ; mov r9, r14                  // r9 = minimum position (can be 0 matches)
+
+            // Greedy loop: consume as many as possible
+            ; =>greedy_loop
+            ; cmp r14, r12
+            ; jge =>greedy_done            // End of input
+            ; movzx eax, BYTE [rbx + r14]
+        );
+        self.emit_range_check(ranges, greedy_done)?;
+        dynasm!(self.asm
+            ; inc r14
+            ; jmp =>greedy_loop
+
+            ; =>greedy_done
+            // r14 = max position after greedy consumption
+            // Now backtrack until lookahead succeeds
+
+            ; =>try_lookahead
+        );
+
+        // Emit lookahead check inline (same as plus version)
+        let lookahead_inner_match = self.asm.new_dynamic_label();
+        let lookahead_inner_mismatch = self.asm.new_dynamic_label();
+
+        dynasm!(self.asm
+            ; mov r10, r14                 // Save position for restoration
+        );
+
+        for step in lookahead_steps {
+            match step {
+                PatternStep::Byte(byte) => {
+                    dynasm!(self.asm
+                        ; cmp r14, r12
+                        ; jge =>lookahead_inner_mismatch
+                        ; movzx eax, BYTE [rbx + r14]
+                        ; cmp al, *byte as i8
+                        ; jne =>lookahead_inner_mismatch
+                        ; inc r14
+                    );
+                }
+                PatternStep::Ranges(inner_ranges) => {
+                    dynasm!(self.asm
+                        ; cmp r14, r12
+                        ; jge =>lookahead_inner_mismatch
+                        ; movzx eax, BYTE [rbx + r14]
+                    );
+                    self.emit_range_check(inner_ranges, lookahead_inner_mismatch)?;
+                    dynasm!(self.asm
+                        ; inc r14
+                    );
+                }
+                PatternStep::WordBoundary => {
+                    self.emit_word_boundary_check(lookahead_inner_mismatch, true)?;
+                }
+                PatternStep::NotWordBoundary => {
+                    self.emit_word_boundary_check(lookahead_inner_mismatch, false)?;
+                }
+                PatternStep::EndOfText => {
+                    dynasm!(self.asm
+                        ; cmp r14, r12
+                        ; jne =>lookahead_inner_mismatch
+                    );
+                }
+                PatternStep::StartOfText => {
+                    dynasm!(self.asm
+                        ; test r14, r14
+                        ; jnz =>lookahead_inner_mismatch
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        dynasm!(self.asm
+            ; jmp =>lookahead_inner_match
+            ; =>lookahead_inner_mismatch
+        );
+
+        if is_positive {
+            // Positive lookahead: inner mismatch means lookahead failed
+            dynasm!(self.asm
+                ; mov r14, r10
+                ; jmp =>lookahead_failed
+                ; =>lookahead_inner_match
+                ; mov r14, r10
+                ; jmp =>success
+            );
+        } else {
+            // Negative lookahead: inner match means lookahead assertion fails
+            dynasm!(self.asm
+                ; mov r14, r10
+                ; jmp =>success             // Inner mismatch = negative lookahead succeeds
+                ; =>lookahead_inner_match
+                ; mov r14, r10
+                ; jmp =>lookahead_failed    // Inner match = negative lookahead fails
+            );
+        }
+
+        dynasm!(self.asm
+            ; =>lookahead_failed
+            ; cmp r14, r9
+            ; jle =>fail_label             // At or below minimum - fail
+            ; dec r14                      // Backtrack one position
+            ; jmp =>try_lookahead
+
+            ; =>success
+        );
+
         Ok(())
     }
 
@@ -1571,6 +2217,445 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
+    /// Emits greedy+ with backtracking for remaining steps.
+    ///
+    /// Algorithm:
+    /// 1. Match at least one character (required for +)
+    /// 2. Greedily match as many as possible
+    /// 3. Try to match remaining steps
+    /// 4. If remaining steps fail, backtrack (give up one character) and retry
+    /// 5. If position drops below minimum (start+1), overall match fails
+    fn emit_greedy_plus_with_backtracking(
+        &mut self,
+        ranges: &[ByteRange],
+        remaining_steps: &[PatternStep],
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        let greedy_loop = self.asm.new_dynamic_label();
+        let greedy_done = self.asm.new_dynamic_label();
+        let try_remaining = self.asm.new_dynamic_label();
+        let backtrack = self.asm.new_dynamic_label();
+        let success = self.asm.new_dynamic_label();
+
+        // Must match at least one character
+        dynasm!(self.asm
+            ; cmp r14, r12
+            ; jge =>fail_label             // No input available
+            ; movzx eax, BYTE [rbx + r14]
+        );
+        self.emit_range_check(ranges, fail_label)?;
+        dynasm!(self.asm
+            ; inc r14                      // Consumed first byte
+            ; mov r9, r14                  // r9 = minimum position (need at least 1 match)
+
+            // Greedy loop: consume as many as possible
+            ; =>greedy_loop
+            ; cmp r14, r12
+            ; jge =>greedy_done            // End of input
+            ; movzx eax, BYTE [rbx + r14]
+        );
+        self.emit_range_check(ranges, greedy_done)?;
+        dynasm!(self.asm
+            ; inc r14
+            ; jmp =>greedy_loop
+
+            ; =>greedy_done
+            // r14 = max position after greedy consumption
+            // Now try remaining steps, backtracking on failure
+
+            ; =>try_remaining
+        );
+
+        // Emit code for remaining steps
+        // Generate code that jumps to backtrack on failure
+        for step in remaining_steps {
+            self.emit_step_inline(step, backtrack)?;
+        }
+
+        // All remaining steps matched - success
+        dynasm!(self.asm
+            ; jmp =>success
+
+            ; =>backtrack
+            // Remaining steps failed - backtrack one position
+            ; dec r14
+            ; cmp r14, r9
+            ; jl =>fail_label              // Below minimum - overall fail
+            ; jmp =>try_remaining          // Try again with one less character
+
+            ; =>success
+        );
+
+        Ok(())
+    }
+
+    /// Emits greedy* with backtracking for remaining steps.
+    ///
+    /// Similar to plus version but minimum position is start (0 matches allowed).
+    fn emit_greedy_star_with_backtracking(
+        &mut self,
+        ranges: &[ByteRange],
+        remaining_steps: &[PatternStep],
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        let greedy_loop = self.asm.new_dynamic_label();
+        let greedy_done = self.asm.new_dynamic_label();
+        let try_remaining = self.asm.new_dynamic_label();
+        let backtrack = self.asm.new_dynamic_label();
+        let success = self.asm.new_dynamic_label();
+
+        dynasm!(self.asm
+            ; mov r9, r14                  // r9 = minimum position (can match 0)
+
+            // Greedy loop: consume as many as possible
+            ; =>greedy_loop
+            ; cmp r14, r12
+            ; jge =>greedy_done            // End of input
+            ; movzx eax, BYTE [rbx + r14]
+        );
+        self.emit_range_check(ranges, greedy_done)?;
+        dynasm!(self.asm
+            ; inc r14
+            ; jmp =>greedy_loop
+
+            ; =>greedy_done
+            // Try remaining steps, backtracking on failure
+
+            ; =>try_remaining
+        );
+
+        // Emit code for remaining steps
+        for step in remaining_steps {
+            self.emit_step_inline(step, backtrack)?;
+        }
+
+        // All remaining steps matched - success
+        dynasm!(self.asm
+            ; jmp =>success
+
+            ; =>backtrack
+            // Remaining steps failed - backtrack one position
+            ; cmp r14, r9
+            ; jle =>fail_label             // At or below minimum - overall fail
+            ; dec r14
+            ; jmp =>try_remaining
+
+            ; =>success
+        );
+
+        Ok(())
+    }
+
+    /// Emits greedy codepoint+ with backtracking for remaining steps.
+    ///
+    /// For UTF-8 patterns, we need to track character boundaries since we can't
+    /// simply decrement position (multi-byte characters).
+    ///
+    /// Algorithm:
+    /// 1. Match at least one codepoint (required for +)
+    /// 2. Greedily match as many codepoints as possible, saving boundaries
+    /// 3. Try to match remaining steps
+    /// 4. If fail, restore to previous boundary and retry
+    fn emit_greedy_codepoint_plus_with_backtracking(
+        &mut self,
+        cpclass: &CodepointClass,
+        remaining_steps: &[PatternStep],
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        // For codepoint backtracking, we need to save character boundaries
+        // We'll use the stack to save positions
+        let loop_start = self.asm.new_dynamic_label();
+        let loop_done = self.asm.new_dynamic_label();
+        let try_remaining = self.asm.new_dynamic_label();
+        let backtrack = self.asm.new_dynamic_label();
+        let success = self.asm.new_dynamic_label();
+        let first_fail_with_stack = self.asm.new_dynamic_label();
+        let loop_fail_no_stack = self.asm.new_dynamic_label();
+        let loop_fail_with_stack = self.asm.new_dynamic_label();
+        let no_more_boundaries = self.asm.new_dynamic_label();
+
+        // r10 will track the number of saved boundaries on stack
+        dynasm!(self.asm
+            ; xor r10d, r10d               // r10 = boundary count = 0
+        );
+
+        // First iteration: must match at least one codepoint
+        self.emit_utf8_decode(fail_label)?;
+        dynasm!(self.asm
+            ; push rcx                     // Save byte length
+        );
+        self.emit_codepoint_class_membership_check(cpclass, first_fail_with_stack)?;
+        dynasm!(self.asm
+            ; pop rcx
+            ; add r14, rcx                 // Advance position
+            ; push r14                     // Save boundary position
+            ; inc r10                      // boundary count++
+
+            // Greedy loop: match more codepoints
+            ; =>loop_start
+        );
+
+        self.emit_utf8_decode(loop_fail_no_stack)?;
+        dynasm!(self.asm
+            ; push rcx                     // Save byte length
+        );
+        self.emit_codepoint_class_membership_check(cpclass, loop_fail_with_stack)?;
+        dynasm!(self.asm
+            ; pop rcx
+            ; add r14, rcx                 // Advance position
+            ; push r14                     // Save boundary position
+            ; inc r10                      // boundary count++
+            ; jmp =>loop_start
+
+            ; =>first_fail_with_stack
+            ; add rsp, 8                   // Pop saved rcx
+            ; jmp =>fail_label             // First match failed - overall fail
+
+            ; =>loop_fail_no_stack
+            ; jmp =>loop_done
+
+            ; =>loop_fail_with_stack
+            ; add rsp, 8                   // Pop saved rcx
+            ; jmp =>loop_done
+
+            ; =>loop_done
+            // Greedy matching done
+            // Stack has boundary positions, r10 = count
+            // Try remaining steps with backtracking
+
+            ; =>try_remaining
+        );
+
+        // Emit code for remaining steps
+        for step in remaining_steps {
+            self.emit_step_inline(step, backtrack)?;
+        }
+
+        // All remaining steps matched - success!
+        // Clean up stack (pop all saved boundaries)
+        dynasm!(self.asm
+            ; =>success
+            ; lea rsp, [rsp + r10 * 8]     // Pop all boundary positions
+            ; jmp >done
+
+            ; =>backtrack
+            // Remaining steps failed - backtrack to previous boundary
+            ; cmp r10, 1
+            ; jle =>no_more_boundaries     // Need at least 1 match (plus semantics)
+
+            ; pop r14                      // Restore previous boundary position (discard current)
+            ; dec r10
+            ; pop r14                      // Get actual position to retry from
+            ; dec r10
+            ; push r14                     // Put it back for next backtrack
+            ; inc r10
+            ; jmp =>try_remaining
+
+            ; =>no_more_boundaries
+            // Can't backtrack more - clean up and fail
+            ; lea rsp, [rsp + r10 * 8]     // Pop all remaining boundaries
+            ; jmp =>fail_label
+
+            ; done:
+        );
+
+        Ok(())
+    }
+
+    /// Emits code for a single pattern step inline.
+    /// Used when generating code for remaining steps in backtracking.
+    fn emit_step_inline(
+        &mut self,
+        step: &PatternStep,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        match step {
+            PatternStep::Byte(byte) => {
+                dynasm!(self.asm
+                    ; cmp r14, r12
+                    ; jge =>fail_label
+                    ; movzx eax, BYTE [rbx + r14]
+                    ; cmp al, *byte as i8
+                    ; jne =>fail_label
+                    ; inc r14
+                );
+            }
+            PatternStep::Ranges(ranges) => {
+                dynasm!(self.asm
+                    ; cmp r14, r12
+                    ; jge =>fail_label
+                    ; movzx eax, BYTE [rbx + r14]
+                );
+                self.emit_range_check(ranges, fail_label)?;
+                dynasm!(self.asm
+                    ; inc r14
+                );
+            }
+            PatternStep::GreedyPlus(ranges) => {
+                // Nested greedy+ - emit simple version (no recursive backtracking for simplicity)
+                let loop_start = self.asm.new_dynamic_label();
+                let loop_done = self.asm.new_dynamic_label();
+
+                dynasm!(self.asm
+                    ; cmp r14, r12
+                    ; jge =>fail_label
+                    ; movzx eax, BYTE [rbx + r14]
+                );
+                self.emit_range_check(ranges, fail_label)?;
+                dynasm!(self.asm
+                    ; inc r14
+                    ; =>loop_start
+                    ; cmp r14, r12
+                    ; jge =>loop_done
+                    ; movzx eax, BYTE [rbx + r14]
+                );
+                self.emit_range_check(ranges, loop_done)?;
+                dynasm!(self.asm
+                    ; inc r14
+                    ; jmp =>loop_start
+                    ; =>loop_done
+                );
+            }
+            PatternStep::GreedyStar(ranges) => {
+                let loop_start = self.asm.new_dynamic_label();
+                let loop_done = self.asm.new_dynamic_label();
+
+                dynasm!(self.asm
+                    ; =>loop_start
+                    ; cmp r14, r12
+                    ; jge =>loop_done
+                    ; movzx eax, BYTE [rbx + r14]
+                );
+                self.emit_range_check(ranges, loop_done)?;
+                dynasm!(self.asm
+                    ; inc r14
+                    ; jmp =>loop_start
+                    ; =>loop_done
+                );
+            }
+            PatternStep::CodepointClass(cpclass, _target) => {
+                self.emit_codepoint_class_check(cpclass, fail_label)?;
+            }
+            PatternStep::GreedyCodepointPlus(cpclass) => {
+                // Simple greedy codepoint+ without backtracking
+                self.emit_greedy_codepoint_plus(cpclass, fail_label)?;
+            }
+            PatternStep::WordBoundary => {
+                self.emit_word_boundary_check(fail_label, true)?;
+            }
+            PatternStep::NotWordBoundary => {
+                self.emit_word_boundary_check(fail_label, false)?;
+            }
+            PatternStep::StartOfText => {
+                dynasm!(self.asm
+                    ; test r14, r14
+                    ; jnz =>fail_label
+                );
+            }
+            PatternStep::EndOfText => {
+                dynasm!(self.asm
+                    ; cmp r14, r12
+                    ; jne =>fail_label
+                );
+            }
+            PatternStep::StartOfLine => {
+                let at_start = self.asm.new_dynamic_label();
+                dynasm!(self.asm
+                    ; test r14, r14
+                    ; jz =>at_start
+                    ; mov rax, r14
+                    ; dec rax
+                    ; movzx eax, BYTE [rbx + rax]
+                    ; cmp al, 0x0A
+                    ; jne =>fail_label
+                    ; =>at_start
+                );
+            }
+            PatternStep::EndOfLine => {
+                let at_end = self.asm.new_dynamic_label();
+                dynasm!(self.asm
+                    ; cmp r14, r12
+                    ; je =>at_end
+                    ; movzx eax, BYTE [rbx + r14]
+                    ; cmp al, 0x0A
+                    ; jne =>fail_label
+                    ; =>at_end
+                );
+            }
+            PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_) => {
+                // Capture markers don't consume input - skip
+            }
+            PatternStep::PositiveLookahead(inner_steps) => {
+                self.emit_standalone_lookahead(inner_steps, fail_label, true)?;
+            }
+            PatternStep::NegativeLookahead(inner_steps) => {
+                self.emit_standalone_lookahead(inner_steps, fail_label, false)?;
+            }
+            PatternStep::PositiveLookbehind(inner_steps, min_len) => {
+                self.emit_lookbehind_check(inner_steps, *min_len, fail_label, true)?;
+            }
+            PatternStep::NegativeLookbehind(inner_steps, min_len) => {
+                self.emit_lookbehind_check(inner_steps, *min_len, fail_label, false)?;
+            }
+            PatternStep::Alt(alternatives) => {
+                // Simple alternation - try each and jump to success if one matches
+                let alt_success = self.asm.new_dynamic_label();
+                for (i, alt_steps) in alternatives.iter().enumerate() {
+                    let is_last = i == alternatives.len() - 1;
+                    // Each alternative needs its own failure label to clean up stack
+                    let try_next = self.asm.new_dynamic_label();
+
+                    // Save position for this alternative
+                    dynasm!(self.asm
+                        ; push r14
+                    );
+
+                    for alt_step in alt_steps {
+                        self.emit_step_inline(alt_step, try_next)?;
+                    }
+
+                    // This alternative succeeded
+                    dynasm!(self.asm
+                        ; add rsp, 8               // Pop saved position (don't restore)
+                        ; jmp =>alt_success
+                    );
+
+                    // Restore position and try next alternative (or fail)
+                    dynasm!(self.asm
+                        ; =>try_next
+                        ; pop r14
+                    );
+
+                    if is_last {
+                        // Last alternative failed - jump to outer fail_label
+                        dynasm!(self.asm
+                            ; jmp =>fail_label
+                        );
+                    }
+                }
+                dynasm!(self.asm
+                    ; =>alt_success
+                );
+            }
+            _ => {
+                // Unsupported step - return error
+                return Err(crate::error::Error::new(
+                    crate::error::ErrorKind::Jit(format!("Unsupported step in backtracking: {:?}", step)),
+                    "",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Emits standalone lookahead assertion check.
     ///
     /// For positive lookahead (?=...): continues if inner pattern matches, else jumps to fail_label.
@@ -2169,6 +3254,376 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
+    /// Emits code to decode one UTF-8 codepoint from input.
+    ///
+    /// On entry:
+    /// - rbx = input_ptr
+    /// - r14 = current position
+    /// - r12 = input length
+    ///
+    /// On success:
+    /// - eax = decoded codepoint (u32)
+    /// - ecx = byte length (1-4)
+    /// - Does NOT modify r14 (caller advances position)
+    ///
+    /// On failure (end of input or invalid UTF-8):
+    /// - Jumps to fail_label
+    ///
+    /// Clobbers: rax, rcx, r8, r9
+    fn emit_utf8_decode(&mut self, fail_label: dynasmrt::DynamicLabel) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        // The interpreter's decode_utf8 algorithm:
+        // - 0x00-0x7F: 1 byte ASCII (cp = b0)
+        // - 0x80-0xBF: Invalid (continuation at start)
+        // - 0xC0-0xDF: 2 bytes (cp = (b0 & 0x1F) << 6 | (b1 & 0x3F))
+        // - 0xE0-0xEF: 3 bytes (cp = (b0 & 0x0F) << 12 | (b1 & 0x3F) << 6 | (b2 & 0x3F))
+        // - 0xF0-0xF7: 4 bytes (cp = (b0 & 0x07) << 18 | (b1 & 0x3F) << 12 | (b2 & 0x3F) << 6 | (b3 & 0x3F))
+
+        let ascii = self.asm.new_dynamic_label();
+        let two_byte = self.asm.new_dynamic_label();
+        let three_byte = self.asm.new_dynamic_label();
+        let four_byte = self.asm.new_dynamic_label();
+        let done = self.asm.new_dynamic_label();
+
+        // Check if at end of input
+        dynasm!(self.asm
+            ; cmp r14, r12
+            ; jge =>fail_label
+
+            // Load first byte
+            ; movzx eax, BYTE [rbx + r14]
+
+            // Check lead byte type
+            ; cmp al, 0x80u8 as i8
+            ; jb =>ascii          // < 0x80: ASCII
+
+            ; cmp al, 0xC0u8 as i8
+            ; jb =>fail_label     // 0x80-0xBF: invalid (continuation at start)
+
+            ; cmp al, 0xE0u8 as i8
+            ; jb =>two_byte       // 0xC0-0xDF: 2-byte sequence
+
+            ; cmp al, 0xF0u8 as i8
+            ; jb =>three_byte     // 0xE0-0xEF: 3-byte sequence
+
+            ; cmp al, 0xF8u8 as i8
+            ; jb =>four_byte      // 0xF0-0xF7: 4-byte sequence
+
+            ; jmp =>fail_label    // >= 0xF8: invalid
+        );
+
+        // ASCII (1 byte): codepoint = b0, len = 1
+        dynasm!(self.asm
+            ; =>ascii
+            ; mov ecx, 1
+            // eax already contains the codepoint
+            ; jmp =>done
+        );
+
+        // 2-byte sequence: need 1 more byte
+        dynasm!(self.asm
+            ; =>two_byte
+            ; mov r8, r14
+            ; inc r8
+            ; cmp r8, r12
+            ; jge =>fail_label    // Not enough bytes
+
+            // Load second byte, check it's a continuation (0x80-0xBF)
+            ; movzx r9d, BYTE [rbx + r8]
+            ; mov ecx, r9d
+            ; and ecx, 0xC0
+            ; cmp ecx, 0x80
+            ; jne =>fail_label    // Not a continuation byte
+
+            // Decode: cp = (b0 & 0x1F) << 6 | (b1 & 0x3F)
+            ; and eax, 0x1F       // eax = b0 & 0x1F
+            ; shl eax, 6          // eax = (b0 & 0x1F) << 6
+            ; and r9d, 0x3F       // r9d = b1 & 0x3F
+            ; or eax, r9d         // eax = codepoint
+            ; mov ecx, 2
+            ; jmp =>done
+        );
+
+        // 3-byte sequence: need 2 more bytes
+        dynasm!(self.asm
+            ; =>three_byte
+            ; mov r8, r14
+            ; add r8, 2
+            ; cmp r8, r12
+            ; jge =>fail_label    // Not enough bytes
+
+            // Check continuation bytes
+            ; movzx r9d, BYTE [rbx + r14 + 1]
+            ; mov ecx, r9d
+            ; and ecx, 0xC0
+            ; cmp ecx, 0x80
+            ; jne =>fail_label
+
+            ; movzx r8d, BYTE [rbx + r14 + 2]
+            ; mov ecx, r8d
+            ; and ecx, 0xC0
+            ; cmp ecx, 0x80
+            ; jne =>fail_label
+
+            // Decode: cp = (b0 & 0x0F) << 12 | (b1 & 0x3F) << 6 | (b2 & 0x3F)
+            ; and eax, 0x0F       // eax = b0 & 0x0F
+            ; shl eax, 12         // eax = (b0 & 0x0F) << 12
+            ; and r9d, 0x3F       // r9d = b1 & 0x3F
+            ; shl r9d, 6          // r9d = (b1 & 0x3F) << 6
+            ; or eax, r9d         // eax |= (b1 & 0x3F) << 6
+            ; and r8d, 0x3F       // r8d = b2 & 0x3F
+            ; or eax, r8d         // eax = codepoint
+            ; mov ecx, 3
+            ; jmp =>done
+        );
+
+        // 4-byte sequence: need 3 more bytes
+        dynasm!(self.asm
+            ; =>four_byte
+            ; mov r8, r14
+            ; add r8, 3
+            ; cmp r8, r12
+            ; jge =>fail_label    // Not enough bytes
+
+            // Check continuation bytes
+            ; movzx r9d, BYTE [rbx + r14 + 1]
+            ; mov ecx, r9d
+            ; and ecx, 0xC0
+            ; cmp ecx, 0x80
+            ; jne =>fail_label
+
+            ; movzx r8d, BYTE [rbx + r14 + 2]
+            ; mov ecx, r8d
+            ; and ecx, 0xC0
+            ; cmp ecx, 0x80
+            ; jne =>fail_label
+
+            ; push r10            // Save r10 since we need another register
+            ; movzx r10d, BYTE [rbx + r14 + 3]
+            ; mov ecx, r10d
+            ; and ecx, 0xC0
+            ; cmp ecx, 0x80
+            ; jne >four_byte_fail
+
+            // Decode: cp = (b0 & 0x07) << 18 | (b1 & 0x3F) << 12 | (b2 & 0x3F) << 6 | (b3 & 0x3F)
+            ; and eax, 0x07       // eax = b0 & 0x07
+            ; shl eax, 18         // eax = (b0 & 0x07) << 18
+            ; and r9d, 0x3F       // r9d = b1 & 0x3F
+            ; shl r9d, 12         // r9d = (b1 & 0x3F) << 12
+            ; or eax, r9d
+            ; and r8d, 0x3F       // r8d = b2 & 0x3F
+            ; shl r8d, 6          // r8d = (b2 & 0x3F) << 6
+            ; or eax, r8d
+            ; and r10d, 0x3F      // r10d = b3 & 0x3F
+            ; or eax, r10d        // eax = codepoint
+            ; pop r10
+            ; mov ecx, 4
+            ; jmp =>done
+
+            ; four_byte_fail:
+            ; pop r10
+            ; jmp =>fail_label
+        );
+
+        dynasm!(self.asm
+            ; =>done
+            // eax = codepoint, ecx = byte length
+        );
+
+        Ok(())
+    }
+
+    /// Emits code to check if a codepoint is in a CodepointClass.
+    ///
+    /// Uses a helper function call since binary search over arbitrary ranges
+    /// is complex in pure assembly.
+    ///
+    /// On entry:
+    /// - eax = codepoint to check
+    /// - cpclass = the CodepointClass to check against
+    ///
+    /// On success (codepoint is in class):
+    /// - Continues execution
+    ///
+    /// On failure (codepoint not in class):
+    /// - Jumps to fail_label
+    ///
+    /// Clobbers: rax, rdi, rsi, caller-saved registers
+    fn emit_codepoint_class_membership_check(
+        &mut self,
+        cpclass: &CodepointClass,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        // Store the CodepointClass in a Box to ensure stable address
+        let cpclass_box = Box::new(cpclass.clone());
+        let cpclass_ptr = cpclass_box.as_ref() as *const CodepointClass;
+
+        // Keep the box alive by storing it
+        self.codepoint_classes.push(cpclass_box);
+
+        // Helper function that checks membership
+        // Must use extern "sysv64" for System V AMD64 ABI
+        extern "sysv64" fn check_membership(codepoint: u32, cpclass: *const CodepointClass) -> bool {
+            let cpclass = unsafe { &*cpclass };
+            cpclass.contains(codepoint)
+        }
+
+        let check_fn: extern "sysv64" fn(u32, *const CodepointClass) -> bool = check_membership;
+        let check_fn_ptr = check_fn as usize as i64;
+
+        // Call the helper function
+        // System V ABI: rdi = first arg (codepoint), rsi = second arg (cpclass ptr)
+        dynasm!(self.asm
+            // eax already contains codepoint
+            ; mov edi, eax                    // rdi = codepoint (zero-extended)
+            ; mov rsi, QWORD cpclass_ptr as i64  // rsi = cpclass pointer
+            ; mov rax, QWORD check_fn_ptr     // Load function pointer
+            ; call rax                        // Call check_membership
+
+            // rax (al) = result: true (1) if in class, false (0) if not
+            ; test al, al
+            ; jz =>fail_label                 // If false, jump to fail
+        );
+
+        Ok(())
+    }
+
+    /// Emits code for a single CodepointClass check.
+    ///
+    /// Mirrors interpreter's CodepointClass handling:
+    /// 1. Decode one UTF-8 codepoint
+    /// 2. Check if codepoint is in the class
+    /// 3. Advance position by the byte length
+    ///
+    /// Register usage:
+    /// - rbx = input_ptr
+    /// - r14 = current position (advanced on success)
+    /// - r12 = input length
+    fn emit_codepoint_class_check(
+        &mut self,
+        cpclass: &CodepointClass,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        let fail_with_stack = self.asm.new_dynamic_label();
+
+        // Decode UTF-8 codepoint
+        // After: eax = codepoint, ecx = byte_length
+        self.emit_utf8_decode(fail_label)?;
+
+        // Save byte length on stack (we need it after the call)
+        dynasm!(self.asm
+            ; push rcx            // Save byte length
+        );
+
+        // Check codepoint membership
+        // This will use eax (codepoint) and may clobber caller-saved registers
+        // If fail, need to pop stack first
+        self.emit_codepoint_class_membership_check(cpclass, fail_with_stack)?;
+
+        // Restore byte length and advance position
+        dynasm!(self.asm
+            ; pop rcx             // Restore byte length
+            ; add r14, rcx        // Advance position by byte_length
+            ; jmp >done
+
+            ; =>fail_with_stack
+            ; add rsp, 8          // Pop the saved rcx
+            ; jmp =>fail_label
+
+            ; done:
+        );
+
+        Ok(())
+    }
+
+    /// Emits code for GreedyCodepointPlus - greedy one-or-more codepoint matching.
+    ///
+    /// Mirrors interpreter's GreedyCodepointPlus handling:
+    /// 1. Must match at least one codepoint
+    /// 2. Then match as many codepoints as possible (greedy)
+    ///
+    /// Register usage:
+    /// - rbx = input_ptr
+    /// - r14 = current position (advanced on matches)
+    /// - r12 = input length
+    fn emit_greedy_codepoint_plus(
+        &mut self,
+        cpclass: &CodepointClass,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        let loop_start = self.asm.new_dynamic_label();
+        let loop_done = self.asm.new_dynamic_label();
+        let first_fail_with_stack = self.asm.new_dynamic_label();
+        let loop_fail_no_stack = self.asm.new_dynamic_label();
+        let loop_fail_with_stack = self.asm.new_dynamic_label();
+
+        // First iteration: must match at least one codepoint
+        // Decode UTF-8 and check membership
+        self.emit_utf8_decode(fail_label)?;
+
+        dynasm!(self.asm
+            ; push rcx            // Save byte length
+        );
+
+        // Check membership - if fail, need to pop stack first
+        self.emit_codepoint_class_membership_check(cpclass, first_fail_with_stack)?;
+
+        dynasm!(self.asm
+            ; pop rcx             // Restore byte length
+            ; add r14, rcx        // Advance position
+        );
+
+        // Greedy loop: match as many more codepoints as possible
+        dynasm!(self.asm
+            ; =>loop_start
+        );
+
+        // Try to decode another codepoint (failure means end of greedy match, not overall fail)
+        // No stack push has happened yet at this point
+        self.emit_utf8_decode(loop_fail_no_stack)?;
+
+        dynasm!(self.asm
+            ; push rcx            // Save byte length
+        );
+
+        // Check membership - on failure, need to pop stack first then exit loop
+        self.emit_codepoint_class_membership_check(cpclass, loop_fail_with_stack)?;
+
+        dynasm!(self.asm
+            ; pop rcx             // Restore byte length
+            ; add r14, rcx        // Advance position
+            ; jmp =>loop_start
+
+            // First match failed with stack (first codepoint not in class)
+            ; =>first_fail_with_stack
+            ; add rsp, 8          // Pop the saved rcx
+            ; jmp =>fail_label
+
+            // Loop exit: UTF-8 decode failed (end of input or invalid UTF-8)
+            // No stack cleanup needed
+            ; =>loop_fail_no_stack
+            ; jmp =>loop_done
+
+            // Loop exit: codepoint not in class (after push rcx)
+            // Need to pop stack
+            ; =>loop_fail_with_stack
+            ; add rsp, 8          // Pop the saved rcx
+            ; jmp =>loop_done
+
+            ; =>loop_done
+            // Successfully matched at least one codepoint, greedy match complete
+        );
+
+        Ok(())
+    }
+
     /// Emits the captures_fn with full capture tracking.
     ///
     /// Returns the offset of the generated code.
@@ -2449,22 +3904,13 @@ impl TaggedNfaJitCompiler {
                     ; =>alt_success
                 );
             }
-            PatternStep::CodepointClass(_, _) => {
-                // Unicode codepoint classes in captures - fall back to interpreter
-                // This shouldn't normally be reached since extract_pattern_steps handles these
-                // by continuing to the target state, but we need to handle the case
-                // Return an error that will trigger interpreter fallback
-                return Err(Error::new(
-                    ErrorKind::Jit("CodepointClass in captures not supported yet".to_string()),
-                    "",
-                ));
+            PatternStep::CodepointClass(cpclass, _target) => {
+                // Unicode codepoint class - decode UTF-8 and check membership
+                self.emit_codepoint_class_check(cpclass, fail_label)?;
             }
-            PatternStep::GreedyCodepointPlus(_) => {
-                // Greedy codepoint repetition requires UTF-8 decoding - fall back to interpreter
-                return Err(Error::new(
-                    ErrorKind::Jit("GreedyCodepointPlus in captures not supported yet".to_string()),
-                    "",
-                ));
+            PatternStep::GreedyCodepointPlus(cpclass) => {
+                // Greedy codepoint repetition - decode UTF-8 and match greedily
+                self.emit_greedy_codepoint_plus(cpclass, fail_label)?;
             }
             PatternStep::WordBoundary => {
                 // Word boundary assertion in captures - doesn't consume input
@@ -2679,6 +4125,37 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
+    /// Returns a short name for a step type (for debugging).
+    #[allow(dead_code)]
+    fn step_name(step: &PatternStep) -> &'static str {
+        match step {
+            PatternStep::Byte(_) => "Byte",
+            PatternStep::Ranges(_) => "Ranges",
+            PatternStep::GreedyPlus(_) => "GreedyPlus",
+            PatternStep::GreedyStar(_) => "GreedyStar",
+            PatternStep::GreedyPlusLookahead(_, _, _) => "GreedyPlusLookahead",
+            PatternStep::GreedyStarLookahead(_, _, _) => "GreedyStarLookahead",
+            PatternStep::NonGreedyPlus(_, _) => "NonGreedyPlus",
+            PatternStep::NonGreedyStar(_, _) => "NonGreedyStar",
+            PatternStep::Alt(_) => "Alt",
+            PatternStep::CaptureStart(_) => "CaptureStart",
+            PatternStep::CaptureEnd(_) => "CaptureEnd",
+            PatternStep::CodepointClass(_, _) => "CodepointClass",
+            PatternStep::GreedyCodepointPlus(_) => "GreedyCodepointPlus",
+            PatternStep::WordBoundary => "WordBoundary",
+            PatternStep::NotWordBoundary => "NotWordBoundary",
+            PatternStep::PositiveLookahead(_) => "PositiveLookahead",
+            PatternStep::NegativeLookahead(_) => "NegativeLookahead",
+            PatternStep::PositiveLookbehind(_, _) => "PositiveLookbehind",
+            PatternStep::NegativeLookbehind(_, _) => "NegativeLookbehind",
+            PatternStep::Backref(_) => "Backref",
+            PatternStep::StartOfText => "StartOfText",
+            PatternStep::EndOfText => "EndOfText",
+            PatternStep::StartOfLine => "StartOfLine",
+            PatternStep::EndOfLine => "EndOfLine",
+        }
+    }
+
     /// Calculates the minimum length of input needed to match a pattern.
     fn calc_min_len(steps: &[PatternStep]) -> usize {
         steps.iter().map(|s| match s {
@@ -2781,6 +4258,16 @@ impl TaggedNfaJitCompiler {
                         _ => {}
                     }
                 }
+                // Recursively process alternation branches
+                PatternStep::Alt(alternatives) => {
+                    let combined_alts: Vec<Vec<PatternStep>> = alternatives
+                        .iter()
+                        .map(|alt| Self::combine_greedy_with_lookahead(alt.clone()))
+                        .collect();
+                    result.push(PatternStep::Alt(combined_alts));
+                    i += 1;
+                    continue;
+                }
                 _ => {}
             }
             // No combination - keep original step
@@ -2837,6 +4324,29 @@ impl TaggedNfaJitCompiler {
                     }
                     // Unicode codepoint class - can JIT with helper function
                     NfaInstruction::CodepointClass(cpclass, target) => {
+                        // Check if target state forms a greedy loop (like \p{L}+)
+                        let target_state = &self.nfa.states[*target as usize];
+                        if target_state.epsilon.len() == 2 && target_state.transitions.is_empty() {
+                            let eps0 = target_state.epsilon[0];
+                            let eps1 = target_state.epsilon[1];
+
+                            // Greedy loop: first epsilon goes back to current (loop), second goes forward
+                            if eps0 == current {
+                                steps.push(PatternStep::GreedyCodepointPlus(cpclass.clone()));
+                                visited[current as usize] = true;
+                                visited[*target as usize] = true;
+                                current = eps1;
+                                continue;
+                            } else if eps1 == current {
+                                // Alternative loop structure
+                                steps.push(PatternStep::GreedyCodepointPlus(cpclass.clone()));
+                                visited[current as usize] = true;
+                                visited[*target as usize] = true;
+                                current = eps0;
+                                continue;
+                            }
+                        }
+                        // Not a greedy loop - single codepoint class match
                         steps.push(PatternStep::CodepointClass(cpclass.clone(), *target));
                         // CodepointClass instruction consumes input and moves to target
                         current = *target;
@@ -3284,6 +4794,15 @@ impl TaggedNfaJitCompiler {
     /// Finds the common end state for an alternation starting at `start`.
     /// Returns None if no common end is found.
     fn find_alternation_end(&self, start: StateId) -> Option<StateId> {
+        self.find_alternation_end_with_depth(start, 0)
+    }
+
+    fn find_alternation_end_with_depth(&self, start: StateId, depth: usize) -> Option<StateId> {
+        // Limit recursion depth to prevent stack overflow on deeply nested patterns
+        if depth > 20 {
+            return None;
+        }
+
         let state = &self.nfa.states[start as usize];
         if state.epsilon.len() < 2 {
             return None;
@@ -3294,7 +4813,7 @@ impl TaggedNfaJitCompiler {
         let mut end_states: Vec<StateId> = Vec::new();
 
         for &alt_start in &state.epsilon {
-            if let Some(end) = self.trace_to_merge_point(alt_start, start) {
+            if let Some(end) = self.trace_to_merge_point_with_depth(alt_start, start, depth) {
                 end_states.push(end);
             } else {
                 return None;
@@ -3315,13 +4834,20 @@ impl TaggedNfaJitCompiler {
 
     /// Traces from a state to find where it merges (state with incoming epsilon from multiple sources).
     /// Returns the merge point state ID or None.
-    fn trace_to_merge_point(&self, start: StateId, alt_start: StateId) -> Option<StateId> {
+    fn trace_to_merge_point_with_depth(&self, start: StateId, alt_start: StateId, depth: usize) -> Option<StateId> {
+        use crate::nfa::NfaInstruction;
+
+        // Limit recursion depth to prevent stack overflow
+        if depth > 20 {
+            return None;
+        }
+
         let mut current = start;
         let mut visited = vec![false; self.nfa.states.len()];
         visited[alt_start as usize] = true; // Don't go back to alternation start
 
-        for _ in 0..100 {
-            // Limit iterations
+        for _ in 0..200 {
+            // Limit iterations (increased for nested patterns)
             if visited[current as usize] {
                 return None; // Cycle
             }
@@ -3329,32 +4855,66 @@ impl TaggedNfaJitCompiler {
 
             let state = &self.nfa.states[current as usize];
 
-            // Match state or state with no outgoing transitions
-            if state.is_match || (state.transitions.is_empty() && state.epsilon.is_empty()) {
+            // Match state
+            if state.is_match {
                 return Some(current);
             }
 
-            // State with single epsilon going forward - this might be merge point
-            // Check if it has other incoming epsilons (from other alternatives)
+            // CodepointClass instruction has its target embedded in the instruction
+            if let Some(NfaInstruction::CodepointClass(_, target)) = &state.instruction {
+                current = *target;
+                continue;
+            }
+
+            // State with no outgoing transitions (and no CodepointClass) - end point
+            if state.transitions.is_empty() && state.epsilon.is_empty() {
+                return Some(current);
+            }
+
+            // State with single epsilon going forward
             if state.epsilon.len() == 1 && state.transitions.is_empty() {
-                // Could be part of the path or the merge point
-                // For now, follow it
                 current = state.epsilon[0];
                 continue;
             }
 
-            // State with byte transitions - follow them
+            // State with byte transitions only - follow them
             if !state.transitions.is_empty() && state.epsilon.is_empty() {
-                // Follow the byte transition
                 let target = state.transitions[0].1;
                 current = target;
                 continue;
             }
 
-            // State with both or multiple epsilons - likely the end
-            if state.epsilon.len() == 1 {
-                current = state.epsilon[0];
+            // State with byte transitions AND single epsilon - follow transitions
+            if !state.transitions.is_empty() && state.epsilon.len() == 1 {
+                let target = state.transitions[0].1;
+                current = target;
                 continue;
+            }
+
+            // State with multiple epsilons - could be alternation or greedy loop
+            if state.epsilon.len() >= 2 && state.transitions.is_empty() {
+                // Check if this is a greedy loop (one epsilon goes back to visited state)
+                let mut forward_eps: Vec<StateId> = Vec::new();
+                for &eps in &state.epsilon {
+                    if visited[eps as usize] {
+                        // This epsilon loops back - it's a greedy quantifier, skip it
+                        continue;
+                    }
+                    forward_eps.push(eps);
+                }
+
+                // If only one forward epsilon, follow it (greedy loop exit)
+                if forward_eps.len() == 1 {
+                    current = forward_eps[0];
+                    continue;
+                }
+
+                // Multiple forward epsilons - this is a nested alternation
+                if let Some(nested_end) = self.find_alternation_end_with_depth(current, depth + 1) {
+                    current = nested_end;
+                    continue;
+                }
+                return None;
             }
 
             // Complex - can't determine
@@ -3366,12 +4926,20 @@ impl TaggedNfaJitCompiler {
 
     /// Checks if there's a trivial (empty) path from start to end.
     fn is_trivial_path(&self, start: StateId, end: StateId) -> bool {
+        self.is_trivial_path_with_depth(start, end, 0)
+    }
+
+    fn is_trivial_path_with_depth(&self, start: StateId, end: StateId, depth: usize) -> bool {
+        // Limit recursion depth to prevent stack overflow
+        if depth > 100 {
+            return false;
+        }
         if start == end {
             return true;
         }
         let state = &self.nfa.states[start as usize];
         if state.epsilon.len() == 1 && state.transitions.is_empty() {
-            return state.epsilon[0] == end || self.is_trivial_path(state.epsilon[0], end);
+            return state.epsilon[0] == end || self.is_trivial_path_with_depth(state.epsilon[0], end, depth + 1);
         }
         false
     }
