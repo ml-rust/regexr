@@ -1,18 +1,18 @@
-//! Step-based interpreter for fast pattern matching.
+//! Tagged NFA interpreter for fast pattern matching.
 //!
 //! This interpreter executes pre-extracted pattern steps for fast matching.
 //! It provides the same algorithm as the JIT but interpreted.
 
 use crate::nfa::tagged::shared::PatternStep;
 
-/// Fast step-based pattern matcher.
+/// Fast step-based Tagged NFA matcher.
 ///
 /// Executes pattern steps directly without full NFA simulation.
 /// This is faster than Thompson NFA simulation for patterns that can
 /// be expressed as a linear sequence of steps.
-pub struct StepInterpreter;
+pub struct TaggedNfa;
 
-impl StepInterpreter {
+impl TaggedNfa {
     /// Finds the first match in the input.
     pub fn find(steps: &[PatternStep], input: &[u8]) -> Option<(usize, usize)> {
         for start in 0..=input.len() {

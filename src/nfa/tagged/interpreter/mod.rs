@@ -1,11 +1,8 @@
 //! Interpreter implementations for Tagged NFA execution.
 //!
-//! This module provides two interpreters:
-//! - `StepInterpreter` - Fast step-based matching for simple patterns
-//! - `TaggedNfaInterpreter` - Full Thompson NFA simulation with sparse capture copying
+//! This module provides the `TaggedNfa` interpreter for fast step-based matching.
+//! For captures and complex patterns, use PikeVm instead.
 
-mod step_interpreter;
-mod nfa_interpreter;
+mod tagged_nfa;
 
-pub use step_interpreter::StepInterpreter;
-pub use nfa_interpreter::TaggedNfaInterpreter;
+pub use tagged_nfa::TaggedNfa;

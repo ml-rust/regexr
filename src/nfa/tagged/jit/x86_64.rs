@@ -149,7 +149,7 @@ impl TaggedNfaJitCompiler {
     }
 
     /// Generates stub code that triggers interpreter fallback.
-    /// If `steps` is provided, they will be used for fast StepInterpreter fallback.
+    /// If `steps` is provided, they will be used for fast TaggedNfa fallback.
     fn compile_with_fallback(mut self, steps: Option<Vec<PatternStep>>) -> Result<TaggedNfaJit> {
         // Record entry point offsets
         let find_offset = self.asm.offset();
@@ -170,7 +170,7 @@ impl TaggedNfaJitCompiler {
 
         // find_fn doesn't need context - it just returns -2 immediately
         // The fast path will detect this and call the interpreter directly
-        // Pass steps for fast StepInterpreter fallback
+        // Pass steps for fast TaggedNfa fallback
         self.finalize(find_offset, captures_offset, false, steps)
     }
 
@@ -890,7 +890,7 @@ impl TaggedNfaJitCompiler {
         };
 
         // find_fn is fully JIT'd and doesn't use context - fast path enabled
-        // Store steps for find_at to use StepInterpreter (JIT doesn't support start offset yet)
+        // Store steps for find_at to use TaggedNfa (JIT doesn't support start offset yet)
         self.finalize(find_offset, captures_offset, false, Some(steps))
     }
 

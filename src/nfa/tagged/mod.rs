@@ -28,7 +28,7 @@ pub use shared::{
 };
 pub use liveness::{analyze_liveness, CaptureBitSet, NfaLiveness, StateLiveness};
 pub use steps::{StepExtractor, combine_greedy_with_lookahead};
-pub use interpreter::{StepInterpreter, TaggedNfaInterpreter};
+pub use interpreter::TaggedNfa;
 
 // Engine facade
 mod engine;

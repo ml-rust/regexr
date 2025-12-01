@@ -6,10 +6,11 @@
 use crate::error::Result;
 use crate::hir::CodepointClass;
 use crate::nfa::Nfa;
+use crate::vm::{PikeVm, PikeVmContext};
 
 use super::super::{
     analyze_liveness, NfaLiveness, TaggedNfaContext, PatternStep,
-    StepInterpreter, TaggedNfaInterpreter, LookaroundCache,
+    TaggedNfa, LookaroundCache,
 };
 use super::x86_64::TaggedNfaJitCompiler;
 
@@ -30,7 +31,8 @@ pub struct TaggedNfaJit {
     captures_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64,
     /// Liveness analysis for sparse copying.
     liveness: NfaLiveness,
-    /// The NFA (for interpreter fallback until full JIT is implemented).
+    /// The NFA (kept for reference, PikeVm is used for fallback).
+    #[allow(dead_code)]
     nfa: Nfa,
     /// Number of capture groups.
     capture_count: u32,
@@ -60,6 +62,10 @@ pub struct TaggedNfaJit {
     cached_ctx: std::sync::RwLock<Option<TaggedNfaContext>>,
     /// Cached captures buffer to avoid allocation.
     cached_captures_buf: std::sync::RwLock<Vec<i64>>,
+    /// PikeVm for interpreter fallback.
+    fallback_vm: PikeVm,
+    /// Cached PikeVm context for fallback.
+    fallback_vm_ctx: std::sync::RwLock<PikeVmContext>,
 }
 
 impl TaggedNfaJit {
@@ -80,6 +86,10 @@ impl TaggedNfaJit {
         find_needs_ctx: bool,
         fallback_steps: Option<Vec<PatternStep>>,
     ) -> Self {
+        // Create PikeVm for fallback
+        let fallback_vm = PikeVm::new(nfa.clone());
+        let fallback_vm_ctx = std::sync::RwLock::new(fallback_vm.create_context());
+
         Self {
             code,
             find_fn,
@@ -96,6 +106,8 @@ impl TaggedNfaJit {
             fallback_steps,
             cached_ctx: std::sync::RwLock::new(None),
             cached_captures_buf: std::sync::RwLock::new(Vec::new()),
+            fallback_vm,
+            fallback_vm_ctx,
         }
     }
 
@@ -135,13 +147,12 @@ impl TaggedNfaJit {
 
             // Check for interpreter fallback (happens for standalone lookahead patterns)
             if result == JIT_USE_INTERPRETER {
-                // Use fast StepInterpreter if we have fallback_steps
+                // Use fast TaggedNfa if we have fallback_steps
                 if let Some(ref steps) = self.fallback_steps {
-                    return StepInterpreter::find(steps, input);
+                    return TaggedNfa::find(steps, input);
                 }
-                // Otherwise fall back to Thompson NFA simulation
-                let interp = TaggedNfaInterpreter::new(&self.nfa, &self.liveness);
-                return interp.find(input);
+                // Otherwise fall back to PikeVm
+                return self.fallback_vm.find(input);
             }
 
             return if result >= 0 {
@@ -200,8 +211,7 @@ impl TaggedNfaJit {
 
             if captures_result == JIT_USE_INTERPRETER {
                 // captures_fn also needs interpreter fallback
-                let interp = TaggedNfaInterpreter::new(&self.nfa, &self.liveness);
-                return interp.find(input);
+                return self.fallback_vm.find(input);
             }
 
             if captures_result >= 0 {
@@ -263,9 +273,9 @@ impl TaggedNfaJit {
         };
 
         if result == JIT_USE_INTERPRETER {
-            // Fall back to interpreter
-            let interp = TaggedNfaInterpreter::new(&self.nfa, &self.liveness);
-            return interp.captures(input);
+            // Fall back to PikeVm
+            let mut ctx = self.fallback_vm_ctx.write().unwrap();
+            return self.fallback_vm.captures_with_context(input, &mut ctx, 0);
         }
 
         if result >= 0 {
@@ -311,20 +321,12 @@ impl TaggedNfaJit {
         if start == 0 {
             return self.find(input);
         }
-        // For non-zero start, use StepInterpreter if we have steps
+        // For non-zero start, use TaggedNfa if we have steps
         if let Some(ref steps) = self.fallback_steps {
-            return StepInterpreter::find_at(steps, input, start);
+            return TaggedNfa::find_at(steps, input, start);
         }
-        // Fall back to Thompson NFA simulation
-        let interp = TaggedNfaInterpreter::new(&self.nfa, &self.liveness);
-        for pos in start..=input.len() {
-            if let Some(caps) = interp.captures_at(input, pos) {
-                if let Some(full_match) = caps.first().and_then(|c| *c) {
-                    return Some(full_match);
-                }
-            }
-        }
-        None
+        // Fall back to PikeVm
+        self.fallback_vm.find_at(input, start)
     }
 }
 
