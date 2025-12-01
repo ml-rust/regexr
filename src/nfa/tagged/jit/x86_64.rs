@@ -3468,22 +3468,17 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
-    /// Emits code to check if a codepoint is in a CodepointClass.
+    /// Emits code to check if a codepoint (in eax) is in the given class.
     ///
-    /// Uses a helper function call since binary search over arbitrary ranges
-    /// is complex in pure assembly.
+    /// Uses ASCII fast path (bitmap lookup) for codepoints < 128,
+    /// falls back to Rust function call for non-ASCII.
     ///
     /// On entry:
     /// - eax = codepoint to check
-    /// - cpclass = the CodepointClass to check against
     ///
-    /// On success (codepoint is in class):
-    /// - Continues execution
-    ///
-    /// On failure (codepoint not in class):
-    /// - Jumps to fail_label
-    ///
-    /// Clobbers: rax, rdi, rsi, caller-saved registers
+    /// On success: falls through
+    /// On failure: jumps to fail_label
+    /// Clobbers: rax, rcx, rdi, rsi, caller-saved registers
     fn emit_codepoint_class_membership_check(
         &mut self,
         cpclass: &CodepointClass,
@@ -3491,6 +3486,21 @@ impl TaggedNfaJitCompiler {
     ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
 
+        let ascii_fast_path = self.asm.new_dynamic_label();
+        let check_done = self.asm.new_dynamic_label();
+
+        // Store bitmap values (these are compile-time constants)
+        let bitmap_lo = cpclass.ascii_bitmap[0];
+        let bitmap_hi = cpclass.ascii_bitmap[1];
+        let is_negated = cpclass.negated;
+
+        // ASCII fast path: if codepoint < 128, use bitmap lookup
+        dynasm!(self.asm
+            ; cmp eax, 128
+            ; jb =>ascii_fast_path
+        );
+
+        // Slow path: call Rust function for non-ASCII codepoints
         // Store the CodepointClass in a Box to ensure stable address
         let cpclass_box = Box::new(cpclass.clone());
         let cpclass_ptr = cpclass_box.as_ref() as *const CodepointClass;
@@ -3520,6 +3530,50 @@ impl TaggedNfaJitCompiler {
             // rax (al) = result: true (1) if in class, false (0) if not
             ; test al, al
             ; jz =>fail_label                 // If false, jump to fail
+            ; jmp =>check_done
+        );
+
+        // ASCII fast path: inline bitmap test
+        // eax = codepoint (0-127)
+        // bitmap[0] covers bits 0-63, bitmap[1] covers bits 64-127
+        dynasm!(self.asm
+            ; =>ascii_fast_path
+            // Check if codepoint < 64 (use bitmap[0]) or >= 64 (use bitmap[1])
+            ; cmp eax, 64
+            ; jae >use_hi_bitmap
+
+            // codepoint < 64: test bit in bitmap[0]
+            ; mov rcx, QWORD bitmap_lo as i64
+            ; mov rdi, rax          // rdi = codepoint (for bt instruction)
+            ; bt rcx, rdi           // CF = bit at position rdi in rcx
+            ; jmp >check_bitmap_result
+
+            ; use_hi_bitmap:
+            // codepoint >= 64: test bit in bitmap[1]
+            ; mov rcx, QWORD bitmap_hi as i64
+            ; mov rdi, rax
+            ; sub rdi, 64           // Adjust for bitmap[1] offset
+            ; bt rcx, rdi           // CF = bit at position rdi in rcx
+
+            ; check_bitmap_result:
+        );
+
+        // CF is set if bit is 1 (codepoint in ranges)
+        // Handle negation: if negated, we want to SUCCEED when bit is NOT set
+        if is_negated {
+            // Negated class: succeed if NOT in bitmap (CF=0)
+            dynasm!(self.asm
+                ; jc =>fail_label    // CF=1 means in bitmap, but negated => fail
+            );
+        } else {
+            // Normal class: succeed if in bitmap (CF=1)
+            dynasm!(self.asm
+                ; jnc =>fail_label   // CF=0 means not in bitmap => fail
+            );
+        }
+
+        dynasm!(self.asm
+            ; =>check_done
         );
 
         Ok(())
@@ -3529,7 +3583,7 @@ impl TaggedNfaJitCompiler {
     ///
     /// Mirrors interpreter's CodepointClass handling:
     /// 1. Decode one UTF-8 codepoint
-    /// 2. Check if codepoint is in the class
+    /// 2. Check if codepoint is in the class (fast path for ASCII, slow path for others)
     /// 3. Advance position by the byte length
     ///
     /// Register usage:
@@ -3549,13 +3603,12 @@ impl TaggedNfaJitCompiler {
         // After: eax = codepoint, ecx = byte_length
         self.emit_utf8_decode(fail_label)?;
 
-        // Save byte length on stack (we need it after the call)
+        // Save byte length on stack (we need it after the membership check)
         dynasm!(self.asm
             ; push rcx            // Save byte length
         );
 
-        // Check codepoint membership
-        // This will use eax (codepoint) and may clobber caller-saved registers
+        // Check codepoint membership (includes ASCII fast path)
         // If fail, need to pop stack first
         self.emit_codepoint_class_membership_check(cpclass, fail_with_stack)?;
 

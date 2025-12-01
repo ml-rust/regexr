@@ -61,12 +61,53 @@ pub struct CodepointClass {
     pub ranges: Vec<(u32, u32)>,
     /// Whether this class is negated.
     pub negated: bool,
+    /// Precomputed ASCII bitmap for fast lookup of codepoints 0-127.
+    /// ascii_bitmap[0] covers bits 0-63, ascii_bitmap[1] covers bits 64-127.
+    /// A set bit means the codepoint is IN the class (before negation is applied).
+    pub ascii_bitmap: [u64; 2],
 }
 
 impl CodepointClass {
-    /// Creates a new codepoint class.
+    /// Creates a new codepoint class with precomputed ASCII bitmap.
     pub fn new(ranges: Vec<(u32, u32)>, negated: bool) -> Self {
-        Self { ranges, negated }
+        let ascii_bitmap = Self::compute_ascii_bitmap(&ranges);
+        Self { ranges, negated, ascii_bitmap }
+    }
+
+    /// Computes the ASCII bitmap from ranges.
+    /// Sets bit i if codepoint i is in any of the ranges (for i in 0..128).
+    fn compute_ascii_bitmap(ranges: &[(u32, u32)]) -> [u64; 2] {
+        let mut bitmap = [0u64; 2];
+        for &(start, end) in ranges {
+            // Only process ranges that overlap with ASCII (0-127)
+            if start > 127 {
+                continue;
+            }
+            let range_start = start as usize;
+            let range_end = (end.min(127)) as usize;
+
+            for cp in range_start..=range_end {
+                if cp < 64 {
+                    bitmap[0] |= 1u64 << cp;
+                } else {
+                    bitmap[1] |= 1u64 << (cp - 64);
+                }
+            }
+        }
+        bitmap
+    }
+
+    /// Fast path: checks if an ASCII codepoint (< 128) is in this class.
+    /// Returns the result with negation already applied.
+    #[inline(always)]
+    pub fn contains_ascii(&self, cp: u32) -> bool {
+        debug_assert!(cp < 128);
+        let in_bitmap = if cp < 64 {
+            (self.ascii_bitmap[0] & (1u64 << cp)) != 0
+        } else {
+            (self.ascii_bitmap[1] & (1u64 << (cp - 64))) != 0
+        };
+        if self.negated { !in_bitmap } else { in_bitmap }
     }
 
     /// Checks if a codepoint is in this class.
