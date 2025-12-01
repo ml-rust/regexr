@@ -2,6 +2,7 @@
 
 use crate::hir::CodepointClass;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 /// A state identifier.
 pub type StateId = u32;
@@ -241,13 +242,17 @@ pub enum NfaInstruction {
     /// End of line assertion.
     EndOfLine,
     /// Positive lookahead.
-    PositiveLookahead(Box<Nfa>),
+    /// Uses Arc to avoid cloning during PikeVM execution.
+    PositiveLookahead(Arc<Nfa>),
     /// Negative lookahead.
-    NegativeLookahead(Box<Nfa>),
+    /// Uses Arc to avoid cloning during PikeVM execution.
+    NegativeLookahead(Arc<Nfa>),
     /// Positive lookbehind.
-    PositiveLookbehind(Box<Nfa>),
+    /// Uses Arc to avoid cloning during PikeVM execution.
+    PositiveLookbehind(Arc<Nfa>),
     /// Negative lookbehind.
-    NegativeLookbehind(Box<Nfa>),
+    /// Uses Arc to avoid cloning during PikeVM execution.
+    NegativeLookbehind(Arc<Nfa>),
     /// Marker for non-greedy quantifier preference.
     /// When this state is reached and leads to a match, prefer this match
     /// over longer matches from continuing the quantifier.

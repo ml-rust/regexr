@@ -2,6 +2,7 @@
 
 use crate::error::Result;
 use crate::hir::{CodepointClass, Hir, HirAnchor, HirCapture, HirClass, HirExpr, HirLookaround, HirLookaroundKind, HirRepeat};
+use std::sync::Arc;
 
 use super::{ByteRange, Nfa, NfaInstruction, NfaState, StateId};
 
@@ -497,18 +498,21 @@ impl NfaBuilder {
 
         let state = self.add_state();
 
+        // Use Arc to allow cheap cloning during PikeVM execution
+        let inner_nfa = Arc::new(inner_nfa);
+
         let instruction = match la.kind {
             HirLookaroundKind::PositiveLookahead => {
-                NfaInstruction::PositiveLookahead(Box::new(inner_nfa))
+                NfaInstruction::PositiveLookahead(inner_nfa)
             }
             HirLookaroundKind::NegativeLookahead => {
-                NfaInstruction::NegativeLookahead(Box::new(inner_nfa))
+                NfaInstruction::NegativeLookahead(inner_nfa)
             }
             HirLookaroundKind::PositiveLookbehind => {
-                NfaInstruction::PositiveLookbehind(Box::new(inner_nfa))
+                NfaInstruction::PositiveLookbehind(inner_nfa)
             }
             HirLookaroundKind::NegativeLookbehind => {
-                NfaInstruction::NegativeLookbehind(Box::new(inner_nfa))
+                NfaInstruction::NegativeLookbehind(inner_nfa)
             }
         };
 

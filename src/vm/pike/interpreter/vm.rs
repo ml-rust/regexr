@@ -16,7 +16,7 @@
 //! 3. **`Arc<Nfa>` for Lookarounds**: Avoids expensive NFA cloning during lookaround checks
 
 use crate::hir::unicode::is_word_byte;
-use crate::nfa::{Nfa, NfaInstruction};
+use crate::nfa::{Nfa, NfaInstruction, StateId};
 use std::sync::Arc;
 
 use crate::vm::pike::shared::{
@@ -320,7 +320,15 @@ impl PikeVm {
 
             // Handle instructions
             if let Some(ref instruction) = state.instruction {
-                match self.process_instruction(instruction, &mut thread, input, pos) {
+                let current_state_id = thread.state;
+                match self.process_instruction(
+                    instruction,
+                    &mut thread,
+                    input,
+                    pos,
+                    current_state_id,
+                    &mut ctx.lookaround_cache,
+                ) {
                     InstructionResult::Continue => {}
                     InstructionResult::Kill => continue,
                     InstructionResult::NonGreedyExit => {
@@ -403,7 +411,15 @@ impl PikeVm {
 
             // Handle instructions
             if let Some(ref instruction) = state.instruction {
-                match self.process_instruction(instruction, &mut thread, input, pos) {
+                let current_state_id = thread.state;
+                match self.process_instruction(
+                    instruction,
+                    &mut thread,
+                    input,
+                    pos,
+                    current_state_id,
+                    &mut ctx.lookaround_cache,
+                ) {
                     InstructionResult::Continue => {}
                     InstructionResult::Kill => continue,
                     InstructionResult::NonGreedyExit => {
@@ -445,12 +461,17 @@ impl PikeVm {
     }
 
     /// Process an NFA instruction and determine what to do with the thread.
+    ///
+    /// For lookaround instructions, uses memoization via the cache to avoid
+    /// re-executing the same lookaround at the same position.
     fn process_instruction(
         &self,
         instruction: &NfaInstruction,
         thread: &mut Thread,
         input: &[u8],
         pos: usize,
+        state_id: StateId,
+        lookaround_cache: &mut std::collections::HashMap<(StateId, usize), bool>,
     ) -> InstructionResult {
         match instruction {
             NfaInstruction::CaptureStart(idx) => {
@@ -527,27 +548,63 @@ impl PikeVm {
                 }
             }
             NfaInstruction::PositiveLookahead(inner_nfa) => {
-                // Use Arc to avoid cloning the NFA
-                let inner_vm = PikeVm::from_arc(Arc::new((**inner_nfa).clone()));
-                if !inner_vm.is_match(&input[pos..]) {
-                    InstructionResult::Kill
-                } else {
+                // Check memoization cache first
+                if let Some(&cached_result) = lookaround_cache.get(&(state_id, pos)) {
+                    return if cached_result {
+                        InstructionResult::Continue
+                    } else {
+                        InstructionResult::Kill
+                    };
+                }
+
+                // Arc::clone is O(1) - just increments reference count
+                let inner_vm = PikeVm::from_arc(Arc::clone(inner_nfa));
+                let matched = inner_vm.is_match(&input[pos..]);
+
+                // Cache the result
+                lookaround_cache.insert((state_id, pos), matched);
+
+                if matched {
                     InstructionResult::Continue
+                } else {
+                    InstructionResult::Kill
                 }
             }
             NfaInstruction::NegativeLookahead(inner_nfa) => {
-                let inner_vm = PikeVm::from_arc(Arc::new((**inner_nfa).clone()));
-                if inner_vm.is_match(&input[pos..]) {
-                    InstructionResult::Kill
-                } else {
+                // Check memoization cache first
+                if let Some(&cached_result) = lookaround_cache.get(&(state_id, pos)) {
+                    return if cached_result {
+                        InstructionResult::Continue
+                    } else {
+                        InstructionResult::Kill
+                    };
+                }
+
+                // Arc::clone is O(1) - just increments reference count
+                let inner_vm = PikeVm::from_arc(Arc::clone(inner_nfa));
+                let matched = !inner_vm.is_match(&input[pos..]);
+
+                // Cache the result (true = lookaround succeeded, i.e., inner did NOT match)
+                lookaround_cache.insert((state_id, pos), matched);
+
+                if matched {
                     InstructionResult::Continue
+                } else {
+                    InstructionResult::Kill
                 }
             }
             NfaInstruction::PositiveLookbehind(inner_nfa) => {
-                // For lookbehind, we need to check if the inner pattern matches
-                // ending at the current position. We do this by trying all possible
-                // start positions before the current position.
-                let inner_vm = PikeVm::from_arc(Arc::new((**inner_nfa).clone()));
+                // Check memoization cache first
+                if let Some(&cached_result) = lookaround_cache.get(&(state_id, pos)) {
+                    return if cached_result {
+                        InstructionResult::Continue
+                    } else {
+                        InstructionResult::Kill
+                    };
+                }
+
+                // Arc::clone is O(1) - just increments reference count
+                let inner_vm = PikeVm::from_arc(Arc::clone(inner_nfa));
                 let mut found = false;
                 for lookback_start in 0..=pos {
                     let slice = &input[lookback_start..pos];
@@ -559,16 +616,28 @@ impl PikeVm {
                         }
                     }
                 }
-                if !found {
-                    InstructionResult::Kill
-                } else {
+
+                // Cache the result
+                lookaround_cache.insert((state_id, pos), found);
+
+                if found {
                     InstructionResult::Continue
+                } else {
+                    InstructionResult::Kill
                 }
             }
             NfaInstruction::NegativeLookbehind(inner_nfa) => {
-                // For negative lookbehind, we check that the inner pattern does NOT match
-                // ending at the current position.
-                let inner_vm = PikeVm::from_arc(Arc::new((**inner_nfa).clone()));
+                // Check memoization cache first
+                if let Some(&cached_result) = lookaround_cache.get(&(state_id, pos)) {
+                    return if cached_result {
+                        InstructionResult::Continue
+                    } else {
+                        InstructionResult::Kill
+                    };
+                }
+
+                // Arc::clone is O(1) - just increments reference count
+                let inner_vm = PikeVm::from_arc(Arc::clone(inner_nfa));
                 let mut found = false;
                 for lookback_start in 0..=pos {
                     let slice = &input[lookback_start..pos];
@@ -579,10 +648,15 @@ impl PikeVm {
                         }
                     }
                 }
-                if found {
-                    InstructionResult::Kill
-                } else {
+
+                // Cache the result (true = lookaround succeeded, i.e., inner did NOT match)
+                let result = !found;
+                lookaround_cache.insert((state_id, pos), result);
+
+                if result {
                     InstructionResult::Continue
+                } else {
+                    InstructionResult::Kill
                 }
             }
             NfaInstruction::NonGreedyExit => {

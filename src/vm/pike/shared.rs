@@ -14,7 +14,7 @@
 //! The full capture Vec is only reconstructed when a match is found.
 
 use crate::nfa::StateId;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 
 /// Thread scheduled for a future position (used for backrefs).
@@ -64,6 +64,11 @@ pub struct PikeVmContext {
     pub capture_slots: Vec<Option<(usize, usize)>>,
     /// Stack for iterative epsilon closure (avoids recursion stack overflow)
     pub epsilon_stack: Vec<Thread>,
+    /// Memoization cache for lookaround results.
+    /// Key: (state_id with lookaround instruction, position in input)
+    /// Value: whether the lookaround matched
+    /// This avoids re-executing the same lookaround at the same position.
+    pub lookaround_cache: HashMap<(StateId, usize), bool>,
 }
 
 impl PikeVmContext {
@@ -77,6 +82,7 @@ impl PikeVmContext {
             generation: 0,
             capture_slots: vec![None; capture_count + 1],
             epsilon_stack: Vec::with_capacity(32),
+            lookaround_cache: HashMap::new(),
         }
     }
 
@@ -94,6 +100,8 @@ impl PikeVmContext {
         for slot in &mut self.capture_slots {
             *slot = None;
         }
+        // Clear lookaround cache for new match attempt
+        self.lookaround_cache.clear();
     }
 
     /// Ensure visited array is large enough for the given state count.
