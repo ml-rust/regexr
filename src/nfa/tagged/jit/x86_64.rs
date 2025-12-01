@@ -890,7 +890,7 @@ impl TaggedNfaJitCompiler {
         };
 
         // find_fn is fully JIT'd and doesn't use context - fast path enabled
-        // Store steps for find_at to use TaggedNfa (JIT doesn't support start offset yet)
+        // Steps stored for fallback when JIT returns JIT_USE_INTERPRETER
         self.finalize(find_offset, captures_offset, false, Some(steps))
     }
 
@@ -3258,6 +3258,36 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
+    /// Emits greedy+ with lookahead for the captures path.
+    /// Reuses the alternation version since register conventions are the same.
+    fn emit_greedy_plus_with_lookahead_in_captures(
+        &mut self,
+        ranges: &[ByteRange],
+        lookahead_steps: &[PatternStep],
+        is_positive: bool,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        // The captures path and alternation path use the same register conventions:
+        // r14 = current position, rbx = input base, r12 = input length
+        // So we can reuse the alternation implementation directly.
+        self.emit_greedy_plus_with_lookahead_in_alt(ranges, lookahead_steps, is_positive, fail_label)
+    }
+
+    /// Emits greedy* with lookahead for the captures path.
+    /// Reuses the alternation version since register conventions are the same.
+    fn emit_greedy_star_with_lookahead_in_captures(
+        &mut self,
+        ranges: &[ByteRange],
+        lookahead_steps: &[PatternStep],
+        is_positive: bool,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        // The captures path and alternation path use the same register conventions:
+        // r14 = current position, rbx = input base, r12 = input length
+        // So we can reuse the alternation implementation directly.
+        self.emit_greedy_star_with_lookahead_in_alt(ranges, lookahead_steps, is_positive, fail_label)
+    }
+
     /// Emits code to decode one UTF-8 codepoint from input.
     ///
     /// On entry:
@@ -3924,23 +3954,29 @@ impl TaggedNfaJitCompiler {
                 // Not word boundary assertion in captures - doesn't consume input
                 self.emit_word_boundary_check(fail_label, false)?;
             }
-            PatternStep::PositiveLookahead(_) |
-            PatternStep::NegativeLookahead(_) |
-            PatternStep::PositiveLookbehind(..) |
-            PatternStep::NegativeLookbehind(..) => {
-                // Lookarounds in captures - fall back to interpreter
-                return Err(Error::new(
-                    ErrorKind::Jit("Lookarounds in captures not supported yet".to_string()),
-                    "",
-                ));
+            PatternStep::PositiveLookahead(inner_steps) => {
+                // Zero-width assertion - doesn't consume input, doesn't affect captures
+                self.emit_standalone_lookahead(inner_steps, fail_label, true)?;
             }
-            PatternStep::GreedyPlusLookahead(_, _, _) |
-            PatternStep::GreedyStarLookahead(_, _, _) => {
-                // Greedy with lookahead in captures - fall back to interpreter
-                return Err(Error::new(
-                    ErrorKind::Jit("Greedy with lookahead in captures not supported yet".to_string()),
-                    "",
-                ));
+            PatternStep::NegativeLookahead(inner_steps) => {
+                // Zero-width assertion - doesn't consume input, doesn't affect captures
+                self.emit_standalone_lookahead(inner_steps, fail_label, false)?;
+            }
+            PatternStep::PositiveLookbehind(inner_steps, min_len) => {
+                // Zero-width assertion - doesn't consume input, doesn't affect captures
+                self.emit_lookbehind_check(inner_steps, *min_len, fail_label, true)?;
+            }
+            PatternStep::NegativeLookbehind(inner_steps, min_len) => {
+                // Zero-width assertion - doesn't consume input, doesn't affect captures
+                self.emit_lookbehind_check(inner_steps, *min_len, fail_label, false)?;
+            }
+            PatternStep::GreedyPlusLookahead(ranges, lookahead_steps, is_positive) => {
+                // Greedy+ with lookahead in captures path
+                self.emit_greedy_plus_with_lookahead_in_captures(ranges, lookahead_steps, *is_positive, fail_label)?;
+            }
+            PatternStep::GreedyStarLookahead(ranges, lookahead_steps, is_positive) => {
+                // Greedy* with lookahead in captures path
+                self.emit_greedy_star_with_lookahead_in_captures(ranges, lookahead_steps, *is_positive, fail_label)?;
             }
             PatternStep::Backref(idx) => {
                 // Backreference: compare captured text with current position
