@@ -1,0 +1,33 @@
+[package]
+name = "regexr"
+version = "0.1.0"
+edition = "2021"
+authors = ["Farhan Syah"]
+description = "A high-performance regex engine built from scratch with JIT compilation and SIMD acceleration"
+license = "MIT"
+repository = "https://github.com/farhan-syah/regexr"
+keywords = ["regex", "jit", "simd", "pattern-matching"]
+categories = ["text-processing", "parsing"]
+
+[features]
+default = ["simd"]
+jit = ["dynasm", "dynasmrt"]
+simd = []
+full = ["jit", "simd"]
+
+[dependencies]
+dynasm = { version = "2.0", optional = true }
+dynasmrt = { version = "2.0", optional = true }
+memchr = "2"
+aho-corasick = "1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+regex = "1"
+fancy-regex = "0.14"
+pcre2 = "0.2"
+aho-corasick = "1"
+
+[[bench]]
+name = "competitors"
+harness = false

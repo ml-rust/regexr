@@ -1,0 +1,26 @@
+# Build output
+/target/
+
+# IDE and editor
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# Project specific
+/research/
+/.claude/
+CLAUDE.md
+
+# Unicode data temp files
+/data/.ucd-temp/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Cargo lock (optional for libraries)
+# Cargo.lock
+
+.python-version

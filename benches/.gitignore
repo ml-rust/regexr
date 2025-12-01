@@ -1,0 +1,14 @@
+# Benchmark output files (generated during benchmarking)
+results/
+*.csv
+*.png
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Temporary files
+*.tmp
+*.swp
+*~
