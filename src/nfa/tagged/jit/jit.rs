@@ -317,16 +317,78 @@ impl TaggedNfaJit {
 
     /// Finds a match starting at or after the given position.
     pub fn find_at(&self, input: &[u8], start: usize) -> Option<(usize, usize)> {
-        // For start=0, use the JIT find function directly
+        if start > input.len() {
+            return None;
+        }
         if start == 0 {
             return self.find(input);
         }
-        // For non-zero start, use TaggedNfa if we have steps
-        if let Some(ref steps) = self.fallback_steps {
-            return TaggedNfa::find_at(steps, input, start);
+
+        // JIT supports start offset by passing sliced input pointer
+        // and adjusting the returned positions
+        let slice_ptr = unsafe { input.as_ptr().add(start) };
+        let slice_len = input.len() - start;
+
+        // Fast path: if find_fn doesn't need context
+        if !self.find_needs_ctx {
+            let result = unsafe {
+                (self.find_fn)(slice_ptr, slice_len, std::ptr::null_mut())
+            };
+
+            if result == JIT_USE_INTERPRETER {
+                // Use fast TaggedNfa if we have fallback_steps
+                if let Some(ref steps) = self.fallback_steps {
+                    return TaggedNfa::find_at(steps, input, start);
+                }
+                return self.fallback_vm.find_at(input, start);
+            }
+
+            return if result >= 0 {
+                let rel_start = (result as u64 >> 32) as usize;
+                let rel_end = (result as u64 & 0xFFFF_FFFF) as usize;
+                Some((start + rel_start, start + rel_end))
+            } else {
+                None
+            };
         }
-        // Fall back to PikeVm
-        self.fallback_vm.find_at(input, start)
+
+        // Slow path: patterns that need context
+        let mut ctx_ref = self.cached_ctx.write().unwrap();
+        let ctx = ctx_ref.get_or_insert_with(|| {
+            TaggedNfaContext::new(
+                self.capture_count,
+                self.state_count,
+                self.lookaround_count as usize,
+                256,
+            )
+        });
+
+        if ctx.lookaround_cache.max_len < slice_len + 1 {
+            ctx.lookaround_cache = LookaroundCache::new(
+                self.lookaround_count as usize,
+                slice_len + 1,
+            );
+        }
+        ctx.reset();
+
+        let result = unsafe {
+            (self.find_fn)(slice_ptr, slice_len, ctx)
+        };
+
+        if result == JIT_USE_INTERPRETER {
+            if let Some(ref steps) = self.fallback_steps {
+                return TaggedNfa::find_at(steps, input, start);
+            }
+            return self.fallback_vm.find_at(input, start);
+        }
+
+        if result >= 0 {
+            let rel_start = (result as u64 >> 32) as usize;
+            let rel_end = (result as u64 & 0xFFFF_FFFF) as usize;
+            Some((start + rel_start, start + rel_end))
+        } else {
+            None
+        }
     }
 }
 
