@@ -62,6 +62,8 @@ pub struct PikeVmContext {
     /// Capture slot storage (reused across calls)
     #[allow(dead_code)]
     pub capture_slots: Vec<Option<(usize, usize)>>,
+    /// Stack for iterative epsilon closure (avoids recursion stack overflow)
+    pub epsilon_stack: Vec<Thread>,
 }
 
 impl PikeVmContext {
@@ -74,6 +76,7 @@ impl PikeVmContext {
             visited: vec![0; state_count],
             generation: 0,
             capture_slots: vec![None; capture_count + 1],
+            epsilon_stack: Vec::with_capacity(32),
         }
     }
 
@@ -83,6 +86,7 @@ impl PikeVmContext {
         self.current_threads.clear();
         self.next_threads.clear();
         self.future_threads.clear();
+        self.epsilon_stack.clear();
         // Don't clear visited or reset generation - the sparse set approach
         // relies on keeping generation incrementing to invalidate old entries.
         // Just increment once to ensure fresh start

@@ -268,147 +268,173 @@ impl PikeVm {
         // Add to current threads (instruction already processed)
         ctx.current_threads.push(thread.clone());
 
-        // Follow epsilon transitions (these need full processing)
+        // Follow epsilon transitions - push to stack and process iteratively
         for &next_id in &state.epsilon {
-            let next_thread = thread.clone_with_state(next_id);
-            self.add_thread_optimized(ctx, next_thread, input, pos);
+            ctx.epsilon_stack.push(thread.clone_with_state(next_id));
         }
+        self.process_epsilon_stack_current(ctx, input, pos);
     }
 
     /// Optimized thread addition with O(1) deduplication.
+    /// Uses iterative epsilon closure to avoid stack overflow on deep epsilon chains.
     #[inline]
     fn add_thread_optimized(
         &self,
         ctx: &mut PikeVmContext,
-        mut thread: Thread,
+        thread: Thread,
         input: &[u8],
         pos: usize,
     ) {
-        let state_id = thread.state as usize;
+        // Push initial thread and process the stack iteratively
+        ctx.epsilon_stack.push(thread);
+        self.process_epsilon_stack_current(ctx, input, pos);
+    }
 
-        // O(1) deduplication check
-        if ctx.visited.get(state_id).copied() == Some(ctx.generation) {
-            // State already visited in this generation
-            // For non-greedy threads, we might need to update, but for simplicity
-            // the first thread to arrive wins (standard PikeVM behavior)
-            return;
-        }
+    /// Process the epsilon stack, adding threads to current_threads.
+    /// This is the core iterative epsilon closure implementation.
+    #[inline]
+    fn process_epsilon_stack_current(
+        &self,
+        ctx: &mut PikeVmContext,
+        input: &[u8],
+        pos: usize,
+    ) {
+        while let Some(mut thread) = ctx.epsilon_stack.pop() {
+            let state_id = thread.state as usize;
 
-        // Mark as visited
-        if state_id < ctx.visited.len() {
-            ctx.visited[state_id] = ctx.generation;
-        }
+            // O(1) deduplication check
+            if ctx.visited.get(state_id).copied() == Some(ctx.generation) {
+                // State already visited in this generation
+                continue;
+            }
 
-        let state = match self.nfa.get(thread.state) {
-            Some(s) => s,
-            None => return,
-        };
+            // Mark as visited
+            if state_id < ctx.visited.len() {
+                ctx.visited[state_id] = ctx.generation;
+            }
 
-        // Handle instructions
-        if let Some(ref instruction) = state.instruction {
-            match self.process_instruction(instruction, &mut thread, input, pos) {
-                InstructionResult::Continue => {}
-                InstructionResult::Kill => return,
-                InstructionResult::NonGreedyExit => {
-                    thread.non_greedy_exit = true;
-                }
-                InstructionResult::Jump(new_pos) => {
-                    // For backrefs: push threads for epsilon transitions from this state
-                    // to be processed at the new position (after the matched backref text).
-                    // Don't push the backref state itself - only follow epsilon transitions.
-                    for &next_id in &state.epsilon {
-                        let next_thread = thread.clone_with_state(next_id);
+            let state = match self.nfa.get(thread.state) {
+                Some(s) => s,
+                None => continue,
+            };
+
+            // Handle instructions
+            if let Some(ref instruction) = state.instruction {
+                match self.process_instruction(instruction, &mut thread, input, pos) {
+                    InstructionResult::Continue => {}
+                    InstructionResult::Kill => continue,
+                    InstructionResult::NonGreedyExit => {
+                        thread.non_greedy_exit = true;
+                    }
+                    InstructionResult::Jump(new_pos) => {
+                        // For backrefs: push threads for epsilon transitions from this state
+                        // to be processed at the new position (after the matched backref text).
+                        for &next_id in &state.epsilon {
+                            let next_thread = thread.clone_with_state(next_id);
+                            ctx.future_threads.push(PendingThread {
+                                pos: new_pos,
+                                thread: next_thread,
+                            });
+                        }
+                        continue;
+                    }
+                    InstructionResult::CodepointTransition { bytes_consumed, target } => {
+                        // Schedule thread at new position
+                        let next_thread = thread.clone_with_state(target);
                         ctx.future_threads.push(PendingThread {
-                            pos: new_pos,
+                            pos: pos + bytes_consumed,
                             thread: next_thread,
                         });
+                        continue;
                     }
-                    return;
-                }
-                InstructionResult::CodepointTransition { bytes_consumed, target } => {
-                    // Schedule thread at new position
-                    let next_thread = thread.clone_with_state(target);
-                    ctx.future_threads.push(PendingThread {
-                        pos: pos + bytes_consumed,
-                        thread: next_thread,
-                    });
-                    return;
                 }
             }
-        }
 
-        // Add to current threads
-        ctx.current_threads.push(thread.clone());
+            // Add to current threads
+            ctx.current_threads.push(thread.clone());
 
-        // Follow epsilon transitions
-        for &next_id in &state.epsilon {
-            let next_thread = thread.clone_with_state(next_id);
-            self.add_thread_optimized(ctx, next_thread, input, pos);
+            // Push epsilon transitions to stack (instead of recursive call)
+            for &next_id in &state.epsilon {
+                ctx.epsilon_stack.push(thread.clone_with_state(next_id));
+            }
         }
     }
 
     /// Add thread to next_threads list with O(1) deduplication.
+    /// Uses iterative epsilon closure to avoid stack overflow on deep epsilon chains.
     #[inline]
     fn add_thread_to_next(
         &self,
         ctx: &mut PikeVmContext,
-        mut thread: Thread,
+        thread: Thread,
         input: &[u8],
         pos: usize,
     ) {
-        let state_id = thread.state as usize;
+        // Push initial thread and process the stack iteratively
+        ctx.epsilon_stack.push(thread);
+        self.process_epsilon_stack_next(ctx, input, pos);
+    }
 
-        // O(1) deduplication check
-        if ctx.visited.get(state_id).copied() == Some(ctx.generation) {
-            return;
-        }
+    /// Process the epsilon stack, adding threads to next_threads.
+    #[inline]
+    fn process_epsilon_stack_next(
+        &self,
+        ctx: &mut PikeVmContext,
+        input: &[u8],
+        pos: usize,
+    ) {
+        while let Some(mut thread) = ctx.epsilon_stack.pop() {
+            let state_id = thread.state as usize;
 
-        // Mark as visited
-        if state_id < ctx.visited.len() {
-            ctx.visited[state_id] = ctx.generation;
-        }
+            // O(1) deduplication check
+            if ctx.visited.get(state_id).copied() == Some(ctx.generation) {
+                continue;
+            }
 
-        let state = match self.nfa.get(thread.state) {
-            Some(s) => s,
-            None => return,
-        };
+            // Mark as visited
+            if state_id < ctx.visited.len() {
+                ctx.visited[state_id] = ctx.generation;
+            }
 
-        // Handle instructions
-        if let Some(ref instruction) = state.instruction {
-            match self.process_instruction(instruction, &mut thread, input, pos) {
-                InstructionResult::Continue => {}
-                InstructionResult::Kill => return,
-                InstructionResult::NonGreedyExit => {
-                    thread.non_greedy_exit = true;
-                }
-                InstructionResult::Jump(new_pos) => {
-                    // For backrefs: push the thread to be processed at the new position
-                    // The thread keeps its current state (which may be a match state)
-                    // and will also follow epsilon transitions when processed
-                    ctx.future_threads.push(PendingThread {
-                        pos: new_pos,
-                        thread,
-                    });
-                    return;
-                }
-                InstructionResult::CodepointTransition { bytes_consumed, target } => {
-                    let next_thread = thread.clone_with_state(target);
-                    ctx.future_threads.push(PendingThread {
-                        pos: pos + bytes_consumed,
-                        thread: next_thread,
-                    });
-                    return;
+            let state = match self.nfa.get(thread.state) {
+                Some(s) => s,
+                None => continue,
+            };
+
+            // Handle instructions
+            if let Some(ref instruction) = state.instruction {
+                match self.process_instruction(instruction, &mut thread, input, pos) {
+                    InstructionResult::Continue => {}
+                    InstructionResult::Kill => continue,
+                    InstructionResult::NonGreedyExit => {
+                        thread.non_greedy_exit = true;
+                    }
+                    InstructionResult::Jump(new_pos) => {
+                        // For backrefs: push the thread to be processed at the new position
+                        ctx.future_threads.push(PendingThread {
+                            pos: new_pos,
+                            thread,
+                        });
+                        continue;
+                    }
+                    InstructionResult::CodepointTransition { bytes_consumed, target } => {
+                        let next_thread = thread.clone_with_state(target);
+                        ctx.future_threads.push(PendingThread {
+                            pos: pos + bytes_consumed,
+                            thread: next_thread,
+                        });
+                        continue;
+                    }
                 }
             }
-        }
 
-        // Add to next threads
-        ctx.next_threads.push(thread.clone());
+            // Add to next threads
+            ctx.next_threads.push(thread.clone());
 
-        // Follow epsilon transitions
-        for &next_id in &state.epsilon {
-            let next_thread = thread.clone_with_state(next_id);
-            self.add_thread_to_next(ctx, next_thread, input, pos);
+            // Push epsilon transitions to stack (instead of recursive call)
+            for &next_id in &state.epsilon {
+                ctx.epsilon_stack.push(thread.clone_with_state(next_id));
+            }
         }
     }
 
