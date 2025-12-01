@@ -15,7 +15,7 @@
 
 use crate::nfa::StateId;
 use std::collections::BinaryHeap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Thread scheduled for a future position (used for backrefs).
 #[derive(Debug)]
@@ -122,14 +122,14 @@ pub struct CaptureNode {
     /// The capture action at this node
     pub action: CaptureAction,
     /// Link to parent node (previous capture action)
-    pub parent: Option<Rc<CaptureNode>>,
+    pub parent: Option<Arc<CaptureNode>>,
 }
 
 impl CaptureNode {
     /// Create a new capture node with the given action and parent.
     #[inline]
-    pub fn new(action: CaptureAction, parent: Option<Rc<CaptureNode>>) -> Rc<Self> {
-        Rc::new(Self { action, parent })
+    pub fn new(action: CaptureAction, parent: Option<Arc<CaptureNode>>) -> Arc<Self> {
+        Arc::new(Self { action, parent })
     }
 }
 
@@ -144,7 +144,7 @@ pub struct Thread {
     pub state: StateId,
     /// Head of the capture history linked list.
     /// None means no captures have been recorded yet.
-    pub capture_head: Option<Rc<CaptureNode>>,
+    pub capture_head: Option<Arc<CaptureNode>>,
     /// Number of capture groups (needed for reconstruction).
     pub capture_count: usize,
     /// Whether this thread passed through a non-greedy exit.

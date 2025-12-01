@@ -214,3 +214,20 @@ pub fn translate(ast: &Ast) -> Result<Hir> {
     let mut translator = HirTranslator::new();
     translator.translate(ast)
 }
+
+/// Computes the maximum capture group index from an HIR expression.
+/// Returns 0 if there are no capture groups.
+pub fn compute_capture_count(expr: &HirExpr) -> u32 {
+    match expr {
+        HirExpr::Empty | HirExpr::Literal(_) | HirExpr::Class(_)
+        | HirExpr::UnicodeCpClass(_) | HirExpr::Anchor(_) | HirExpr::Backref(_) => 0,
+        HirExpr::Concat(exprs) | HirExpr::Alt(exprs) => {
+            exprs.iter().map(compute_capture_count).max().unwrap_or(0)
+        }
+        HirExpr::Repeat(rep) => compute_capture_count(&rep.expr),
+        HirExpr::Capture(cap) => {
+            cap.index.max(compute_capture_count(&cap.expr))
+        }
+        HirExpr::Lookaround(la) => compute_capture_count(&la.expr),
+    }
+}

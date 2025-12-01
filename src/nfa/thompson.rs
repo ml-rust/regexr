@@ -482,11 +482,17 @@ impl NfaBuilder {
 
     /// Builds a lookaround.
     fn build_lookaround(&mut self, la: &HirLookaround) -> Result<Fragment> {
-        // Build the inner NFA
+        // Compute capture_count for the inner expression
+        let inner_capture_count = crate::hir::compute_capture_count(&la.expr);
+
+        // Build the inner NFA with correct capture count
         let mut inner_builder = NfaBuilder::new();
         let inner_nfa = inner_builder.build(&crate::hir::Hir {
             expr: la.expr.clone(),
-            props: Default::default(),
+            props: crate::hir::HirProps {
+                capture_count: inner_capture_count,
+                ..Default::default()
+            },
         })?;
 
         let state = self.add_state();
