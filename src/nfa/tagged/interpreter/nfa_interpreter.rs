@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use crate::nfa::{Nfa, NfaInstruction, StateId};
 use crate::nfa::tagged::shared::ThreadWorklist;
 use crate::nfa::tagged::liveness::{analyze_liveness, NfaLiveness};
+use crate::vm::pike::shared::decode_utf8_codepoint;
 
 /// Memoization cache for lookaround evaluations.
 /// Key: (state_id, position), Value: match result
@@ -62,7 +63,7 @@ impl<'a> TaggedNfaInterpreter<'a> {
     }
 
     /// Attempts to match at a specific position.
-    fn match_at(&self, input: &[u8], start: usize) -> Option<usize> {
+    pub fn match_at(&self, input: &[u8], start: usize) -> Option<usize> {
         self.captures_at(input, start)
             .and_then(|caps| caps.first().and_then(|c| c.map(|(_, end)| end)))
     }
@@ -168,6 +169,52 @@ impl<'a> TaggedNfaInterpreter<'a> {
                         }
                     }
                     continue; // Skip normal match/transition processing for backref states
+                }
+
+                // Handle CodepointClass instruction (consumes input like a transition)
+                if let Some(NfaInstruction::CodepointClass(cpclass, target)) = &state.instruction {
+                    if pos < input.len() {
+                        let remaining = &input[pos..];
+                        if let Some((codepoint, len)) = decode_utf8_codepoint(remaining) {
+                            if cpclass.contains(codepoint) {
+                                // Codepoint matches! Spawn thread at pos + len
+                                let match_pos = pos + len;
+
+                                // If this is also a match state, record match
+                                if state.is_match {
+                                    let thread_priority = current.flags[thread_idx] & 0xFFFF;
+                                    let is_non_greedy = (current.flags[thread_idx] & 0x10000) != 0;
+
+                                    if is_non_greedy {
+                                        return self.extract_captures_at_pos(&current, thread_idx, start, match_pos);
+                                    }
+
+                                    if best_end < 0 || thread_priority >= best_priority {
+                                        best_end = match_pos as i64;
+                                        best_priority = thread_priority;
+                                        for slot in 0..self.stride {
+                                            best_captures[slot] = current.get_capture(thread_idx, slot);
+                                        }
+                                        best_captures[0] = start as i64;
+                                        best_captures[1] = match_pos as i64;
+                                    }
+                                }
+
+                                // Spawn thread for the target state
+                                self.add_thread_with_captures(
+                                    &mut next,
+                                    *target,
+                                    current.flags[thread_idx],
+                                    input,
+                                    match_pos,
+                                    &current,
+                                    thread_idx,
+                                    &mut lookaround_memo,
+                                );
+                            }
+                        }
+                    }
+                    continue; // Skip normal match/transition processing for CodepointClass states
                 }
 
                 // Check for match (non-backref states)
@@ -334,13 +381,10 @@ impl<'a> TaggedNfaInterpreter<'a> {
                         cached
                     } else {
                         // Evaluate lookahead: does inner_nfa match AT current position?
-                        // Important: we check that the match starts at position 0 of the slice,
-                        // not just anywhere in the remaining input.
+                        // Only check position 0, not all positions
                         let inner_liveness = analyze_liveness(inner_nfa);
                         let inner_interp = TaggedNfaInterpreter::new(inner_nfa, &inner_liveness);
-                        let result = inner_interp.find(&input[pos..])
-                            .map(|(start, _)| start == 0)
-                            .unwrap_or(false);
+                        let result = inner_interp.match_at(&input[pos..], 0).is_some();
                         lookaround_memo.insert(cache_key, result);
                         result
                     };
@@ -355,12 +399,10 @@ impl<'a> TaggedNfaInterpreter<'a> {
                         cached
                     } else {
                         // Evaluate lookahead: does inner_nfa NOT match AT current position?
-                        // Important: we check that no match starts at position 0.
+                        // Only check position 0, not all positions
                         let inner_liveness = analyze_liveness(inner_nfa);
                         let inner_interp = TaggedNfaInterpreter::new(inner_nfa, &inner_liveness);
-                        let result = inner_interp.find(&input[pos..])
-                            .map(|(start, _)| start != 0)
-                            .unwrap_or(true);
+                        let result = inner_interp.match_at(&input[pos..], 0).is_none();
                         lookaround_memo.insert(cache_key, result);
                         result
                     };
@@ -482,15 +524,17 @@ impl<'a> TaggedNfaInterpreter<'a> {
                     }
                 }
                 NfaInstruction::CodepointClass(_, _) => {
-                    // TODO: Unicode codepoint class handling
+                    // CodepointClass is handled in the main loop, just like Backref
+                    // The thread needs to be added to the worklist for processing
                 }
             }
         }
 
-        // If this state has byte transitions, is a match, or has a backref instruction, add the thread
-        // Backref states need to be added because backrefs consume input bytes in the main loop
+        // If this state has byte transitions, is a match, or has a backref/codepoint instruction, add the thread
+        // Backref and CodepointClass states need to be added because they consume input bytes in the main loop
         let has_backref = matches!(nfa_state.instruction, Some(NfaInstruction::Backref(_)));
-        if !nfa_state.transitions.is_empty() || nfa_state.is_match || has_backref {
+        let has_codepoint_class = matches!(nfa_state.instruction, Some(NfaInstruction::CodepointClass(_, _)));
+        if !nfa_state.transitions.is_empty() || nfa_state.is_match || has_backref || has_codepoint_class {
             if let Some(thread_idx) = worklist.add_thread(state, new_flags) {
                 // Copy captures from source thread if provided
                 if let Some((src_wl, src_idx)) = source {

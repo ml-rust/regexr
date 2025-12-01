@@ -345,6 +345,8 @@ pub enum PatternStep {
     /// The StateId is the target state after successful match.
     #[allow(dead_code)]
     CodepointClass(CodepointClass, StateId),
+    /// Greedy one-or-more repetition of a codepoint class (e.g., \p{Letter}+).
+    GreedyCodepointPlus(CodepointClass),
     /// Word boundary assertion (\b).
     /// Matches at position where previous char is word and current is not (or vice versa).
     WordBoundary,

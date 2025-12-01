@@ -55,6 +55,11 @@ pub struct EagerDfa {
 impl EagerDfa {
     /// Creates an EagerDfa by materializing all states from a LazyDfa.
     pub fn from_lazy(lazy: &mut LazyDfa) -> Self {
+        // Disable cache flushing during materialization to prevent state loss.
+        // When LazyDfa flushes its cache, state IDs become invalid, which would
+        // corrupt the state mapping we're building during BFS.
+        lazy.set_cache_limit(usize::MAX);
+
         let has_word_boundary = lazy.has_word_boundary();
         let has_anchors = lazy.has_anchors();
         let has_start_anchor = lazy.has_start_anchor();

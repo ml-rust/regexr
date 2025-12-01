@@ -558,22 +558,36 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
             }
         }
         EngineType::LazyDfa => {
-            // Use EagerDfa for better non-JIT performance
-            // EagerDfa pre-computes all states upfront, eliminating hash lookups
             let nfa = nfa::compile(hir)?;
             let capture_nfa = Some(nfa.clone());
-            let mut lazy = LazyDfa::new(nfa);
-            let eager = EagerDfa::from_lazy(&mut lazy);
-            (CompiledInner::EagerDfa(eager), capture_nfa)
+
+            // For patterns with large Unicode classes, use LazyDfa to avoid
+            // state explosion during EagerDfa materialization. EagerDfa creates
+            // all reachable states upfront, which can be millions for large Unicode classes.
+            if hir.props.has_large_unicode_class {
+                (CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))), capture_nfa)
+            } else {
+                // Use EagerDfa for better non-JIT performance on simple patterns.
+                // EagerDfa pre-computes all states upfront, eliminating hash lookups.
+                let mut lazy = LazyDfa::new(nfa);
+                let eager = EagerDfa::from_lazy(&mut lazy);
+                (CompiledInner::EagerDfa(eager), capture_nfa)
+            }
         }
         #[cfg(feature = "jit")]
         EngineType::Jit => {
-            // JIT not implemented yet, fall back to EagerDfa
+            // JIT not implemented yet, fall back to EagerDfa or LazyDfa
             let nfa = nfa::compile(hir)?;
             let capture_nfa = Some(nfa.clone());
-            let mut lazy = LazyDfa::new(nfa);
-            let eager = EagerDfa::from_lazy(&mut lazy);
-            (CompiledInner::EagerDfa(eager), capture_nfa)
+
+            // For patterns with large Unicode classes, use LazyDfa to avoid state explosion
+            if hir.props.has_large_unicode_class {
+                (CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))), capture_nfa)
+            } else {
+                let mut lazy = LazyDfa::new(nfa);
+                let eager = EagerDfa::from_lazy(&mut lazy);
+                (CompiledInner::EagerDfa(eager), capture_nfa)
+            }
         }
     };
 
@@ -702,9 +716,11 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
                     backtracking_jit: None,
                 });
             }
-            Err(_) => {
+            Err(_e) => {
                 // TaggedNfa JIT failed (e.g., lookahead with captures not yet supported).
                 // Fall back to TaggedNfa interpreter which handles all cases correctly.
+                #[cfg(debug_assertions)]
+                eprintln!("[regexr] TaggedNfaJit failed, falling back to interpreter: {}", _e);
                 let engine = TaggedNfaEngine::new(nfa);
                 return Ok(CompiledRegex {
                     inner: CompiledInner::TaggedNfaInterp(engine),

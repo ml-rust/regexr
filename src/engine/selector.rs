@@ -71,18 +71,12 @@ pub fn select_engine_from_hir(hir: &Hir) -> EngineType {
         return EngineType::PikeVm;
     }
 
-    // Large Unicode classes that use CodepointClass instruction need PikeVM.
-    // However, with threshold=500, most Unicode classes now use UTF-8 byte transitions
-    // which LazyDFA handles efficiently. Only fall back to PikeVM if CodepointClass
-    // is actually used (very rare - only for classes with >500 UTF-8 sequences).
-    if hir.props.has_large_unicode_class {
-        // Check if the HIR actually uses UnicodeCpClass (CodepointClass instruction)
-        // If it's just many UTF-8 byte sequences, LazyDFA handles it fine
-        if hir_uses_codepoint_class(&hir.expr) {
-            return EngineType::PikeVm;
-        }
-        // Otherwise, use LazyDFA - it handles UTF-8 byte transitions well
-        return EngineType::LazyDfa;
+    // Large Unicode classes that use CodepointClass instruction.
+    // CodepointClass does codepoint-level matching (UTF-8 decode + range check)
+    // instead of byte-level DFA transitions. LazyDFA cannot handle these -
+    // only PikeVM and TaggedNFA support CodepointClass instructions.
+    if hir_uses_codepoint_class(&hir.expr) {
+        return EngineType::PikeVm;
     }
 
     // Anchors (^, $) are now supported by LazyDFA.

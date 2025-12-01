@@ -460,5 +460,18 @@ fn main() {
         LOOKAROUND_ITERATIONS,
     ));
 
+    // 17. CL100K_BASE - OpenAI GPT-4/GPT-3.5-turbo tokenizer pattern (the real target)
+    // Uses negative lookahead (?!\S) so regex crate doesn't support it
+    // Start with 1 iteration to test - this is a complex pattern
+    const CL100K_ITERATIONS: u32 = 1;
+    let cl100k_pattern = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
+    let cl100k_text = "Hello, world! This is a test of the cl100k_base tokenizer pattern. It's designed to handle contractions like I'm, you're, they've, and we'll. Numbers like 123 and 456789 are split into chunks. Special characters @#$%^&*() are handled too.\n".repeat(20);
+    results.push(run_lookaround_bench(
+        "CL100K_BASE",
+        cl100k_pattern,
+        &cl100k_text,
+        CL100K_ITERATIONS,
+    ));
+
     print_table(&results);
 }

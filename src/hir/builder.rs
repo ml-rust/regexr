@@ -1,7 +1,7 @@
 //! HIR builder - translates AST to HIR.
 
 use crate::error::{Error, ErrorKind, Result};
-use crate::nfa::utf8_automata::{compile_utf8_range, optimize_sequences, Utf8Sequence};
+use crate::nfa::utf8_automata::{compile_utf8_complement, compile_utf8_range, optimize_sequences, Utf8Sequence};
 use crate::parser::{Anchor, Ast, Class, ClassRange, Expr, Flags, Group, GroupKind, Lookaround, LookaroundKind, PerlClassKind, Repeat};
 
 use super::unicode_data;
@@ -286,18 +286,26 @@ impl HirTranslator {
         })?;
 
         // Unicode properties with many code points cause DFA state explosion.
-        // Mark the pattern as having large Unicode classes to fall back to LazyDfa.
+        // Use CodepointClass for large properties to avoid expanding UTF-8 automata.
         // Thresholds:
         //   - total code points > 500
         //   - any range covers > 500 code points
         //   - many disjoint ranges (> 50) cause excessive UTF-8 alternation branches
-        // Negated properties (\P{...}) cover almost all of Unicode, so always mark as large.
+        // Negated properties (\P{...}) cover almost all of Unicode, so always use CodepointClass.
         let total_codepoints: u32 = ranges.iter().map(|(s, e)| e - s + 1).sum();
         let has_large_range = ranges.iter().any(|(s, e)| e - s > 500);
         let has_many_ranges = ranges.len() > 50;
-        if negated || total_codepoints > 500 || has_large_range || has_many_ranges {
+        let is_large = negated || total_codepoints > 500 || has_large_range || has_many_ranges;
+
+        if is_large {
             self.props.has_large_unicode_class = true;
+            // Use CodepointClass for efficient runtime matching
+            let cp_ranges: Vec<(u32, u32)> = ranges.to_vec();
+            return Ok(HirExpr::UnicodeCpClass(CodepointClass::new(cp_ranges, negated)));
         }
+
+        // For small Unicode properties, expand to byte-level automata
+        // which can be handled efficiently by DFA engines
 
         // Convert code point ranges to UTF-8 sequences
         let mut byte_ranges: Vec<(u8, u8)> = Vec::new();
@@ -342,8 +350,55 @@ impl HirTranslator {
         // Optimize UTF-8 sequences
         let optimized_seqs = optimize_sequences(utf8_sequences);
 
-        // Build the final expression
-        Ok(self.build_class_expr(merged_bytes, optimized_seqs, negated))
+        // Build the final expression (non-negated path)
+        Ok(self.build_class_expr(merged_bytes, optimized_seqs, false))
+    }
+
+    /// Builds a negated Unicode class directly from codepoint ranges.
+    /// This is more accurate than reconstructing ranges from UTF-8 sequences.
+    #[allow(dead_code)]
+    fn build_negated_unicode_from_ranges(&mut self, ranges: &[(u32, u32)]) -> HirExpr {
+        // Compute the complement using utf8_automata
+        let complement_sequences = compile_utf8_complement(ranges);
+
+        // Note: We don't fall back to CodepointClass for negated classes.
+        // Even if there are many sequences, the trie-based construction will share
+        // common prefixes and be more efficient than CodepointClass (which requires PikeVM).
+        // This allows LazyDFA and EagerDFA to handle negated Unicode classes.
+
+        // Separate single-byte and multi-byte sequences from the complement
+        let mut complement_bytes: Vec<(u8, u8)> = Vec::new();
+        let mut complement_multibyte: Vec<Utf8Sequence> = Vec::new();
+
+        for seq in complement_sequences {
+            if seq.len() == 1 {
+                complement_bytes.push(seq.ranges[0]);
+            } else {
+                complement_multibyte.push(seq);
+            }
+        }
+
+        // Merge byte ranges
+        complement_bytes.sort_by_key(|r| r.0);
+        let merged_bytes = merge_byte_ranges(complement_bytes);
+
+        // Build the expression using byte-level transitions (NOT negated - complement already computed)
+        let mut alternatives: Vec<HirExpr> = Vec::new();
+
+        if !merged_bytes.is_empty() {
+            alternatives.push(HirExpr::Class(HirClass::new(merged_bytes, false)));
+        }
+
+        if !complement_multibyte.is_empty() {
+            let trie_expr = self.build_utf8_trie(&complement_multibyte);
+            alternatives.push(trie_expr);
+        }
+
+        match alternatives.len() {
+            0 => HirExpr::Class(HirClass::new(vec![], false)), // Empty - matches nothing
+            1 => alternatives.pop().unwrap(),
+            _ => HirExpr::Alt(alternatives),
+        }
     }
 
     /// Translates a repetition.
@@ -563,13 +618,41 @@ impl HirTranslator {
         }
     }
 
-    /// Builds a negated Unicode class using efficient codepoint-level matching.
+    /// Builds a negated Unicode class using CodepointClass.
+    ///
+    /// Uses CodepointClass for efficient runtime matching. The CodepointClass
+    /// instruction decodes UTF-8 and checks codepoint membership directly,
+    /// avoiding the need to materialize the full UTF-8 complement automaton.
     fn build_negated_unicode_class(
         &mut self,
         byte_ranges: Vec<(u8, u8)>,
         utf8_sequences: Vec<Utf8Sequence>,
     ) -> HirExpr {
-        self.build_unicode_codepoint_class(byte_ranges, utf8_sequences, true)
+        // Convert byte ranges and UTF-8 sequences to codepoint ranges
+        let mut codepoint_ranges: Vec<(u32, u32)> = Vec::new();
+
+        // Add codepoints from byte ranges (ASCII: 0-127)
+        for (start, end) in &byte_ranges {
+            codepoint_ranges.push((*start as u32, *end as u32));
+        }
+
+        // Convert UTF-8 sequences back to codepoint ranges
+        for seq in &utf8_sequences {
+            if let Some(range) = self.utf8_sequence_to_code_point_range(seq) {
+                codepoint_ranges.push(range);
+            }
+        }
+
+        // Sort and merge ranges
+        codepoint_ranges.sort_by_key(|r| r.0);
+        let merged = merge_codepoint_ranges(codepoint_ranges);
+
+        // Mark as large unicode class for engine selection
+        self.props.has_large_unicode_class = true;
+
+        // Return as UnicodeCpClass with negated=true
+        // The CodepointClass instruction handles negation directly
+        HirExpr::UnicodeCpClass(CodepointClass::new(merged, true))
     }
 
     /// Builds a Unicode codepoint class for efficient matching.

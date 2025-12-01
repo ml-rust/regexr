@@ -437,6 +437,10 @@ impl TaggedNfaJitCompiler {
                     // Unicode codepoint classes require helper function - fall back to interpreter for now
                     return self.compile_with_fallback(None);
                 }
+                PatternStep::GreedyCodepointPlus(_) => {
+                    // Greedy codepoint repetition requires UTF-8 decoding - fall back to interpreter
+                    return self.compile_with_fallback(None);
+                }
                 PatternStep::WordBoundary => {
                     // Word boundary assertion - doesn't consume input
                     self.emit_word_boundary_check(byte_mismatch, true)?;
@@ -601,6 +605,10 @@ impl TaggedNfaJitCompiler {
                                 }
                                 PatternStep::CodepointClass(_, _) => {
                                     // Unicode codepoint classes in alternation - fall back to interpreter
+                                    return self.compile_with_fallback(None);
+                                }
+                                PatternStep::GreedyCodepointPlus(_) => {
+                                    // Greedy codepoint repetition in alternation - fall back to interpreter
                                     return self.compile_with_fallback(None);
                                 }
                                 PatternStep::WordBoundary => {
@@ -2451,6 +2459,13 @@ impl TaggedNfaJitCompiler {
                     "",
                 ));
             }
+            PatternStep::GreedyCodepointPlus(_) => {
+                // Greedy codepoint repetition requires UTF-8 decoding - fall back to interpreter
+                return Err(Error::new(
+                    ErrorKind::Jit("GreedyCodepointPlus in captures not supported yet".to_string()),
+                    "",
+                ));
+            }
             PatternStep::WordBoundary => {
                 // Word boundary assertion in captures - doesn't consume input
                 self.emit_word_boundary_check(fail_label, true)?;
@@ -2688,6 +2703,8 @@ impl TaggedNfaJitCompiler {
             PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_) => 0,
             // Unicode codepoint classes consume at least 1 byte
             PatternStep::CodepointClass(_, _) => 1,
+            // Greedy codepoint repetition consumes at least 1 byte (UTF-8 codepoint is 1-4 bytes)
+            PatternStep::GreedyCodepointPlus(_) => 1,
             // Word boundaries don't consume input - they're zero-width assertions
             PatternStep::WordBoundary | PatternStep::NotWordBoundary => 0,
             // Lookarounds don't consume input - they're zero-width assertions

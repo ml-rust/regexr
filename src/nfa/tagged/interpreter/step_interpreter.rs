@@ -35,9 +35,14 @@ impl StepInterpreter {
 
     /// Attempts to match at a specific position, returning the end position on success.
     fn match_at(steps: &[PatternStep], input: &[u8], start: usize) -> Option<usize> {
+        Self::match_steps(steps, input, start)
+    }
+
+    /// Matches a sequence of steps starting at the given position.
+    fn match_steps(steps: &[PatternStep], input: &[u8], start: usize) -> Option<usize> {
         let mut pos = start;
 
-        for step in steps {
+        for (step_idx, step) in steps.iter().enumerate() {
             match step {
                 PatternStep::Byte(b) => {
                     if pos >= input.len() || input[pos] != *b {
@@ -184,6 +189,54 @@ impl StepInterpreter {
                 PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_) => {
                     // Capture markers don't consume input - skip them
                     // (we're only finding matches, not tracking captures)
+                }
+                PatternStep::CodepointClass(cpclass, _target) => {
+                    // Decode one UTF-8 codepoint and check class membership
+                    if let Some((cp, len)) = Self::decode_utf8(input, pos) {
+                        if cpclass.contains(cp) {
+                            pos += len;
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+                PatternStep::GreedyCodepointPlus(cpclass) => {
+                    // Must match at least one codepoint
+                    if let Some((cp, len)) = Self::decode_utf8(input, pos) {
+                        if !cpclass.contains(cp) {
+                            return None;
+                        }
+                        pos += len;
+                    } else {
+                        return None;
+                    }
+                    // Match as many as possible
+                    while let Some((cp, len)) = Self::decode_utf8(input, pos) {
+                        if !cpclass.contains(cp) {
+                            break;
+                        }
+                        pos += len;
+                    }
+                }
+                PatternStep::Alt(alternatives) => {
+                    // Try each alternative
+                    let remaining_steps = &steps[step_idx + 1..];
+                    for alt_steps in alternatives {
+                        // Match the alternative
+                        if let Some(alt_end) = Self::match_steps(alt_steps, input, pos) {
+                            // Then match remaining steps after the Alt
+                            if remaining_steps.is_empty() {
+                                return Some(alt_end);
+                            }
+                            if let Some(final_end) = Self::match_steps(remaining_steps, input, alt_end) {
+                                return Some(final_end);
+                            }
+                            // This alternative matched but remaining steps failed, try next alternative
+                        }
+                    }
+                    return None;
                 }
                 _ => {
                     // Unsupported step - should have been filtered during extraction
@@ -335,6 +388,50 @@ impl StepInterpreter {
                 }
                 Self::check_lookahead_recursive(rest, input, pos)
             }
+            PatternStep::CodepointClass(cpclass, _target) => {
+                if let Some((cp, len)) = Self::decode_utf8(input, pos) {
+                    if cpclass.contains(cp) {
+                        return Self::check_lookahead_recursive(rest, input, pos + len);
+                    }
+                }
+                false
+            }
+            PatternStep::GreedyCodepointPlus(cpclass) => {
+                // Must match at least one
+                if let Some((cp, len)) = Self::decode_utf8(input, pos) {
+                    if !cpclass.contains(cp) {
+                        return false;
+                    }
+                    // Greedily match as many as possible
+                    let mut end = pos + len;
+                    while let Some((cp2, len2)) = Self::decode_utf8(input, end) {
+                        if !cpclass.contains(cp2) {
+                            break;
+                        }
+                        end += len2;
+                    }
+                    // Backtrack from longest match to shortest (at least 1)
+                    // Track UTF-8 character boundaries
+                    let mut boundaries: Vec<usize> = vec![pos + len];
+                    let mut p = pos + len;
+                    while let Some((cp2, len2)) = Self::decode_utf8(input, p) {
+                        if !cpclass.contains(cp2) || p >= end {
+                            break;
+                        }
+                        boundaries.push(p + len2);
+                        p += len2;
+                    }
+                    // Backtrack
+                    for &boundary in boundaries.iter().rev() {
+                        if Self::check_lookahead_recursive(rest, input, boundary) {
+                            return true;
+                        }
+                    }
+                    false
+                } else {
+                    false
+                }
+            }
             _ => false,
         }
     }
@@ -376,6 +473,19 @@ impl StepInterpreter {
                         return false;
                     }
                 }
+                PatternStep::CodepointClass(cpclass, _target) => {
+                    if let Some((cp, len)) = Self::decode_utf8(input, p) {
+                        if p + len > pos {
+                            return false; // Would go past lookbehind boundary
+                        }
+                        if !cpclass.contains(cp) {
+                            return false;
+                        }
+                        p += len;
+                    } else {
+                        return false;
+                    }
+                }
                 _ => return false,
             }
         }
@@ -393,5 +503,62 @@ impl StepInterpreter {
     #[inline]
     fn is_word_char(b: u8) -> bool {
         matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_')
+    }
+
+    /// Decodes one UTF-8 codepoint from input at the given position.
+    /// Returns (codepoint, byte_length) on success, None if invalid UTF-8 or at end.
+    #[inline]
+    fn decode_utf8(input: &[u8], pos: usize) -> Option<(u32, usize)> {
+        if pos >= input.len() {
+            return None;
+        }
+        let b0 = input[pos];
+        if b0 < 0x80 {
+            // ASCII: single byte
+            return Some((b0 as u32, 1));
+        } else if b0 < 0xC0 {
+            // Invalid: continuation byte at start
+            return None;
+        } else if b0 < 0xE0 {
+            // 2-byte sequence
+            if pos + 1 >= input.len() {
+                return None;
+            }
+            let b1 = input[pos + 1];
+            if (b1 & 0xC0) != 0x80 {
+                return None;
+            }
+            let cp = ((b0 as u32 & 0x1F) << 6) | (b1 as u32 & 0x3F);
+            return Some((cp, 2));
+        } else if b0 < 0xF0 {
+            // 3-byte sequence
+            if pos + 2 >= input.len() {
+                return None;
+            }
+            let b1 = input[pos + 1];
+            let b2 = input[pos + 2];
+            if (b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80 {
+                return None;
+            }
+            let cp = ((b0 as u32 & 0x0F) << 12) | ((b1 as u32 & 0x3F) << 6) | (b2 as u32 & 0x3F);
+            return Some((cp, 3));
+        } else if b0 < 0xF8 {
+            // 4-byte sequence
+            if pos + 3 >= input.len() {
+                return None;
+            }
+            let b1 = input[pos + 1];
+            let b2 = input[pos + 2];
+            let b3 = input[pos + 3];
+            if (b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80 || (b3 & 0xC0) != 0x80 {
+                return None;
+            }
+            let cp = ((b0 as u32 & 0x07) << 18)
+                | ((b1 as u32 & 0x3F) << 12)
+                | ((b2 as u32 & 0x3F) << 6)
+                | (b3 as u32 & 0x3F);
+            return Some((cp, 4));
+        }
+        None
     }
 }
