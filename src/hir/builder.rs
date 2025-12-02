@@ -115,18 +115,24 @@ impl HirTranslator {
                 let hir_anchor = match anchor {
                     Anchor::StartOfString | Anchor::StartOfInput => {
                         self.props.has_anchors = true;
+                        self.props.has_start_anchor = true;
                         HirAnchor::Start
                     }
                     Anchor::EndOfString | Anchor::EndOfInput => {
                         self.props.has_anchors = true;
+                        self.props.has_end_anchor = true;
                         HirAnchor::End
                     }
                     Anchor::StartOfLine => {
                         self.props.has_anchors = true;
+                        self.props.has_start_anchor = true;
+                        self.props.has_multiline_anchors = true;
                         HirAnchor::StartLine
                     }
                     Anchor::EndOfLine => {
                         self.props.has_anchors = true;
+                        self.props.has_end_anchor = true;
+                        self.props.has_multiline_anchors = true;
                         HirAnchor::EndLine
                     }
                     Anchor::WordBoundary => {
@@ -139,6 +145,7 @@ impl HirTranslator {
                     }
                     Anchor::EndOfInputBeforeNewline => {
                         self.props.has_anchors = true;
+                        self.props.has_end_anchor = true;
                         HirAnchor::End
                     }
                 };

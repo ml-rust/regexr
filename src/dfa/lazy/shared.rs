@@ -213,11 +213,15 @@ impl LazyDfaContext {
         start_set.insert(ctx.nfa.start);
 
         // Compute epsilon closure with assertion filtering
+        // At position 0 (start of input), we're at a word boundary because
+        // there's no preceding word character (NonWord -> first char is transition)
+        let is_at_boundary = if has_word_boundary { Some(true) } else { None };
+
         let start_closure = if has_word_boundary || has_anchors {
             epsilon_closure_with_context(
                 &ctx.nfa,
                 &start_set,
-                None,
+                is_at_boundary,
                 Some(PositionContext::start_of_input()),
             )
         } else {
@@ -318,6 +322,14 @@ pub fn nfa_anchor_info(nfa: &Nfa) -> (bool, bool, bool, bool) {
 }
 
 /// Computes epsilon closure with optional boundary filtering and position context.
+///
+/// States are always added to the closure, but epsilon targets are only followed
+/// if the assertion check passes. This allows tracking assertion states in the
+/// DFA state while preventing traversal of blocked paths.
+///
+/// - Word boundaries: Follow epsilons only when boundary condition matches
+/// - START anchors: Follow epsilons only when at valid start position
+/// - END anchors: Always follow epsilons (checked at match time)
 pub fn epsilon_closure_with_context(
     nfa: &Nfa,
     seeds: &BTreeSet<NfaStateId>,
@@ -328,6 +340,7 @@ pub fn epsilon_closure_with_context(
     let mut stack: Vec<NfaStateId> = seeds.iter().copied().collect();
 
     while let Some(state_id) = stack.pop() {
+        // Always add state to closure (even if assertion doesn't match)
         if !closure.insert(state_id) {
             continue;
         }
@@ -337,43 +350,46 @@ pub fn epsilon_closure_with_context(
             None => continue,
         };
 
-        match &state.instruction {
+        // Check if we should follow epsilon transitions from this state.
+        // If assertion doesn't match, we include the state but don't follow its epsilons.
+        let should_follow_epsilons = match &state.instruction {
+            // Word boundaries: follow only when boundary condition matches
             Some(NfaInstruction::WordBoundary) => match is_at_boundary {
-                Some(true) => {}
-                Some(false) => continue,
-                None => continue,
+                Some(true) => true,   // At boundary, follow
+                Some(false) => false, // Not at boundary, don't follow
+                None => false,        // Unknown, don't follow
             },
             Some(NfaInstruction::NotWordBoundary) => match is_at_boundary {
-                Some(false) => {}
-                Some(true) => continue,
-                None => continue,
+                Some(false) => true, // Not at boundary, follow
+                Some(true) => false, // At boundary, don't follow
+                None => false,       // Unknown, don't follow
             },
+
+            // START anchors: follow only when at valid start position
             Some(NfaInstruction::StartOfText) => match pos_ctx {
-                Some(ctx) if ctx.at_start_of_input => {}
-                Some(_) => continue,
-                None => continue,
-            },
-            Some(NfaInstruction::EndOfText) => match pos_ctx {
-                Some(ctx) if ctx.at_end_of_input => {}
-                Some(_) => continue,
-                None => continue,
+                Some(ctx) if ctx.at_start_of_input => true,
+                Some(_) => false,
+                None => false,
             },
             Some(NfaInstruction::StartOfLine) => match pos_ctx {
-                Some(ctx) if ctx.at_start_of_line => {}
-                Some(_) => continue,
-                None => continue,
+                Some(ctx) if ctx.at_start_of_line => true,
+                Some(_) => false,
+                None => false,
             },
-            Some(NfaInstruction::EndOfLine) => match pos_ctx {
-                Some(ctx) if ctx.at_end_of_line => {}
-                Some(_) => continue,
-                None => continue,
-            },
-            _ => {}
-        }
 
-        for &eps_target in &state.epsilon {
-            if !closure.contains(&eps_target) {
-                stack.push(eps_target);
+            // END anchors: always follow epsilons (check at match time)
+            Some(NfaInstruction::EndOfText) => true,
+            Some(NfaInstruction::EndOfLine) => true,
+
+            // No assertion: always follow
+            _ => true,
+        };
+
+        if should_follow_epsilons {
+            for &eps_target in &state.epsilon {
+                if !closure.contains(&eps_target) {
+                    stack.push(eps_target);
+                }
             }
         }
     }

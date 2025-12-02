@@ -45,6 +45,8 @@ impl ShiftOrJitCompiler {
             shift_or.nullable,
             shift_or.has_leading_word_boundary,
             shift_or.has_trailing_word_boundary,
+            shift_or.has_start_anchor,
+            shift_or.has_end_anchor,
         ))
     }
 

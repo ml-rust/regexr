@@ -349,11 +349,8 @@ impl<'a> Iterator for Matches<'a> {
                         *last_end = if abs_start == abs_end {
                             // Find the next char boundary after abs_end
                             let remaining = &self.text[abs_end..];
-                            let next_char_len = remaining
-                                .chars()
-                                .next()
-                                .map(|c| c.len_utf8())
-                                .unwrap_or(1);
+                            let next_char_len =
+                                remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
                             abs_end + next_char_len
                         } else {
                             abs_end
@@ -400,11 +397,7 @@ impl<'r, 't> Iterator for CapturesIter<'r, 't> {
                 let abs_end = offset + end;
                 self.last_end = if start == end {
                     let remaining = &self.text[abs_end..];
-                    let next_char_len = remaining
-                        .chars()
-                        .next()
-                        .map(|c| c.len_utf8())
-                        .unwrap_or(1);
+                    let next_char_len = remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
                     abs_end + next_char_len
                 } else {
                     abs_end

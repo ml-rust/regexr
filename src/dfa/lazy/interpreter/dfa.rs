@@ -394,7 +394,12 @@ impl LazyDfa {
 
     /// Finds the first match in the input.
     pub fn find(&mut self, input: &[u8]) -> Option<(usize, usize)> {
-        if self.ctx.has_start_anchor {
+        // If pattern has both start and end anchors, they may be on different branches
+        // of an alternation (e.g., ^X|Y$), so we need to do an unanchored search.
+        // Only optimize with line-boundary-only search if we have ONLY a start anchor.
+        let start_only = self.ctx.has_start_anchor && !self.ctx.has_end_anchor;
+
+        if start_only {
             if self.ctx.has_multiline_anchors {
                 if let Some(end) = self.find_at(input, 0) {
                     return Some((0, end));
@@ -422,7 +427,12 @@ impl LazyDfa {
 
     /// Finds a match starting at the given position.
     pub fn find_at(&mut self, input: &[u8], start: usize) -> Option<usize> {
-        if self.ctx.has_start_anchor {
+        // If pattern has ONLY a start anchor (no end anchor), we can skip invalid positions.
+        // But if it has both anchors (possibly on different alternation branches), we need
+        // to try all positions and let the NFA handle anchor checking per branch.
+        let start_only = self.ctx.has_start_anchor && !self.ctx.has_end_anchor;
+
+        if start_only {
             let valid_start = if self.ctx.has_multiline_anchors {
                 start == 0 || (start > 0 && input[start - 1] == b'\n')
             } else {
@@ -656,6 +666,10 @@ impl LazyDfa {
     }
 
     /// Checks if the end position satisfies any trailing assertions.
+    ///
+    /// For patterns like `^A|B$`, we need to check if there's ANY valid path to a match.
+    /// - If there's a match state that doesn't require an assertion, the match is valid.
+    /// - Only require an assertion if ALL match paths require it.
     fn check_end_assertions(&self, input: &[u8], pos: usize, state: DfaStateId) -> bool {
         if !self.ctx.has_word_boundary && !self.ctx.has_anchors {
             return true;
@@ -667,6 +681,17 @@ impl LazyDfa {
             None => return true,
         };
 
+        // For end anchors: If there's a match path that doesn't require end anchors,
+        // the match is valid without satisfying them. This handles patterns like `^A|B$`.
+        // Note: This only applies to end anchors, not word boundaries.
+        if self.ctx.has_anchors && !self.ctx.has_word_boundary {
+            let has_clean_match_path = self.has_match_without_end_anchors(&dfa_state.nfa_states);
+            if has_clean_match_path {
+                return true;
+            }
+        }
+
+        // No clean match path - check if assertions are satisfied
         if self.ctx.has_word_boundary {
             let prev_class = dfa_state.prev_class;
 
@@ -719,21 +744,50 @@ impl LazyDfa {
         true
     }
 
+    /// Checks if there's a match state that doesn't have any pending END anchors.
+    /// This handles patterns like `^A|B$` where branch 1 can match without EndOfLine.
+    ///
+    /// Note: This only checks for END anchors (EndOfLine, EndOfText), not word boundaries.
+    /// Word boundaries are handled differently during transition computation.
+    fn has_match_without_end_anchors(&self, nfa_states: &BTreeSet<NfaStateId>) -> bool {
+        // Find all match states in the closure
+        for &nfa_id in nfa_states {
+            if let Some(nfa_state) = self.ctx.nfa.get(nfa_id) {
+                if nfa_state.is_match {
+                    // Check if this match state has any pending END anchor
+                    let has_end_anchor = nfa_state.instruction.as_ref().map_or(false, |instr| {
+                        matches!(instr, NfaInstruction::EndOfLine | NfaInstruction::EndOfText)
+                    });
+                    if !has_end_anchor {
+                        // Found a match state without pending end anchors
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Helper to check if any NFA state in the set has a pending assertion.
+    ///
+    /// Important: We only check states that are actually IN the nfa_states set,
+    /// NOT their epsilon targets. The epsilon closure already filtered out assertion
+    /// states that don't match the current position context. Checking epsilon targets
+    /// would incorrectly require assertions for paths that were already blocked.
+    ///
+    /// For example, in pattern `(?m)^A|B$`:
+    /// - Branch 1 reaches match through ^A (no end anchor)
+    /// - Branch 2 reaches match through B$ (EndOfLine)
+    /// After matching, the DFA state may include states from both branches.
+    /// If EndOfLine was filtered out during epsilon closure (because we're not at EOL),
+    /// we shouldn't require it - branch 1's path is still valid.
     fn state_needs_assertion<F>(&self, nfa_states: &BTreeSet<NfaStateId>, pred: F) -> bool
     where
         F: Fn(&NfaInstruction) -> bool,
     {
         nfa_states.iter().any(|&nfa_id| {
             self.ctx.nfa.get(nfa_id).map_or(false, |nfa_state| {
-                if nfa_state.instruction.as_ref().map_or(false, &pred) {
-                    return true;
-                }
-                nfa_state.epsilon.iter().any(|&eps_target| {
-                    self.ctx.nfa.get(eps_target).map_or(false, |eps_state| {
-                        eps_state.instruction.as_ref().map_or(false, &pred)
-                    })
-                })
+                nfa_state.instruction.as_ref().map_or(false, &pred)
             })
         })
     }
@@ -746,36 +800,12 @@ impl LazyDfa {
             None => return (false, false),
         };
 
-        let needs_word_boundary = dfa_state.nfa_states.iter().any(|&nfa_id| {
-            self.ctx.nfa.get(nfa_id).map_or(false, |nfa_state| {
-                if matches!(&nfa_state.instruction, Some(NfaInstruction::WordBoundary)) {
-                    return true;
-                }
-                nfa_state.epsilon.iter().any(|&eps_target| {
-                    self.ctx.nfa.get(eps_target).map_or(false, |eps_state| {
-                        matches!(&eps_state.instruction, Some(NfaInstruction::WordBoundary))
-                    })
-                })
-            })
+        let needs_word_boundary = self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
+            matches!(instr, NfaInstruction::WordBoundary)
         });
 
-        let needs_not_word_boundary = dfa_state.nfa_states.iter().any(|&nfa_id| {
-            self.ctx.nfa.get(nfa_id).map_or(false, |nfa_state| {
-                if matches!(
-                    &nfa_state.instruction,
-                    Some(NfaInstruction::NotWordBoundary)
-                ) {
-                    return true;
-                }
-                nfa_state.epsilon.iter().any(|&eps_target| {
-                    self.ctx.nfa.get(eps_target).map_or(false, |eps_state| {
-                        matches!(
-                            &eps_state.instruction,
-                            Some(NfaInstruction::NotWordBoundary)
-                        )
-                    })
-                })
-            })
+        let needs_not_word_boundary = self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
+            matches!(instr, NfaInstruction::NotWordBoundary)
         });
 
         (needs_word_boundary, needs_not_word_boundary)

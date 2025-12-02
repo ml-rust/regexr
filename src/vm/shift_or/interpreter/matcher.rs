@@ -23,7 +23,48 @@ impl<'a> ShiftOrInterpreter<'a> {
 
     /// Finds the first match, returning (start, end).
     pub fn find(&self, input: &[u8]) -> Option<(usize, usize)> {
-        // Try matching at each position, preferring longest match (greedy)
+        // If start anchor, only try matching at position 0
+        if self.shift_or.has_start_anchor {
+            if let Some(end) = self.match_at(input, 0) {
+                // If end anchor, must match entire input
+                if self.shift_or.has_end_anchor {
+                    if end == input.len() {
+                        return Some((0, end));
+                    }
+                    return None;
+                }
+                return Some((0, end));
+            }
+            // If pattern is nullable with start anchor, return empty match at 0
+            if self.shift_or.nullable {
+                if self.shift_or.has_end_anchor {
+                    if input.is_empty() {
+                        return Some((0, 0));
+                    }
+                    return None;
+                }
+                return Some((0, 0));
+            }
+            return None;
+        }
+
+        // If end anchor but no start anchor, try all positions but only accept end matches
+        if self.shift_or.has_end_anchor {
+            for start in 0..=input.len() {
+                if let Some(end) = self.match_at(input, start) {
+                    if end == input.len() {
+                        return Some((start, end));
+                    }
+                }
+            }
+            // If pattern is nullable with end anchor, return empty match at end
+            if self.shift_or.nullable {
+                return Some((input.len(), input.len()));
+            }
+            return None;
+        }
+
+        // No anchors: try matching at each position, preferring longest match (greedy)
         for start in 0..=input.len() {
             if let Some(end) = self.match_at(input, start) {
                 return Some((start, end));
@@ -45,7 +86,36 @@ impl<'a> ShiftOrInterpreter<'a> {
             return None;
         }
 
-        // Try matching at each position from pos
+        // If start anchor, can only match at position 0
+        if self.shift_or.has_start_anchor {
+            if pos > 0 {
+                return None; // Can't find a match after position 0 with start anchor
+            }
+            if let Some(end) = self.match_at(input, 0) {
+                if self.shift_or.has_end_anchor {
+                    if end == input.len() {
+                        return Some((0, end));
+                    }
+                    return None;
+                }
+                return Some((0, end));
+            }
+            return None;
+        }
+
+        // If end anchor, only accept matches that end at input.len()
+        if self.shift_or.has_end_anchor {
+            for start in pos..=input.len() {
+                if let Some(end) = self.match_at(input, start) {
+                    if end == input.len() {
+                        return Some((start, end));
+                    }
+                }
+            }
+            return None;
+        }
+
+        // No anchors: try matching at each position from pos
         for start in pos..=input.len() {
             if let Some(end) = self.match_at(input, start) {
                 return Some((start, end));

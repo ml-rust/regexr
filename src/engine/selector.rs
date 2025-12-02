@@ -79,16 +79,16 @@ pub fn select_engine_from_hir(hir: &Hir) -> EngineType {
         return EngineType::PikeVm;
     }
 
-    // Anchors (^, $) are now supported by LazyDFA.
-    // Shift-Or doesn't support anchors, so skip it for those patterns.
-    if hir.props.has_anchors {
-        return EngineType::LazyDfa;
-    }
-
     // Small patterns (≤64 character positions) use Shift-Or
     // Shift-Or uses Glushkov NFA (ε-free) for bit-parallel execution
+    // ShiftOr now supports non-multiline anchors (^, $)
     if is_shift_or_compatible(hir) {
         return EngineType::ShiftOr;
+    }
+
+    // Multiline anchors ((?m)^, (?m)$) require LazyDFA for proper handling
+    if hir.props.has_multiline_anchors {
+        return EngineType::LazyDfa;
     }
 
     // Medium patterns (65-256 character positions) use Wide Shift-Or
@@ -230,11 +230,14 @@ mod tests {
     }
 
     #[test]
-    fn test_anchors_use_lazy_dfa() {
-        // Anchors now use LazyDFA (implemented in DFA)
-        assert_eq!(get_engine_from_hir(r"^hello"), EngineType::LazyDfa);
-        assert_eq!(get_engine_from_hir(r"world$"), EngineType::LazyDfa);
-        assert_eq!(get_engine_from_hir(r"^hello$"), EngineType::LazyDfa);
+    fn test_anchors_engine_selection() {
+        // Non-multiline anchors use ShiftOr (fast bit-parallel matching)
+        assert_eq!(get_engine_from_hir(r"^hello"), EngineType::ShiftOr);
+        assert_eq!(get_engine_from_hir(r"world$"), EngineType::ShiftOr);
+        assert_eq!(get_engine_from_hir(r"^hello$"), EngineType::ShiftOr);
+
+        // Multiline anchors require LazyDFA (position-aware matching)
         assert_eq!(get_engine_from_hir(r"(?m)^line"), EngineType::LazyDfa);
+        assert_eq!(get_engine_from_hir(r"(?m)line$"), EngineType::LazyDfa);
     }
 }

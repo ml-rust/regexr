@@ -163,9 +163,40 @@ mod tests {
 
     #[test]
     fn test_anchors_not_supported() {
-        // ShiftOr does not support anchors
+        // ShiftOr::from_hir() does not support anchors (use from_hir_with_anchors() instead)
         assert!(make_shift_or(r"^word").is_none());
         assert!(make_shift_or(r"word$").is_none());
+    }
+
+    fn make_shift_or_with_anchors(pattern: &str) -> Option<ShiftOr> {
+        let ast = parse(pattern).ok()?;
+        let hir = translate(&ast).ok()?;
+        ShiftOr::from_hir_with_anchors(&hir)
+    }
+
+    #[test]
+    fn test_anchors_supported_with_special_constructor() {
+        // ShiftOr::from_hir_with_anchors() supports non-multiline anchors
+        let so = make_shift_or_with_anchors(r"^hello").unwrap();
+        let interp = ShiftOrInterpreter::new(&so);
+
+        // Start anchor: only matches at beginning
+        assert!(interp.is_match(b"hello world"));
+        assert!(!interp.is_match(b"say hello"));
+        assert!(!interp.is_match(b"  hello"));
+
+        // End anchor
+        let so = make_shift_or_with_anchors(r"world$").unwrap();
+        let interp = ShiftOrInterpreter::new(&so);
+        assert!(interp.is_match(b"hello world"));
+        assert!(!interp.is_match(b"world is big"));
+
+        // Both anchors
+        let so = make_shift_or_with_anchors(r"^hello$").unwrap();
+        let interp = ShiftOrInterpreter::new(&so);
+        assert!(interp.is_match(b"hello"));
+        assert!(!interp.is_match(b"hello world"));
+        assert!(!interp.is_match(b"say hello"));
     }
 
     #[test]
@@ -183,6 +214,11 @@ mod tests {
 
         fn make_jit(pattern: &str) -> Option<JitShiftOr> {
             let so = make_shift_or(pattern)?;
+            JitShiftOr::compile(&so)
+        }
+
+        fn make_jit_with_anchors(pattern: &str) -> Option<JitShiftOr> {
+            let so = make_shift_or_with_anchors(pattern)?;
             JitShiftOr::compile(&so)
         }
 
@@ -207,6 +243,26 @@ mod tests {
             let jit = make_jit("xyz").unwrap();
             let result = jit.find(b"abcdef");
             assert!(result.is_none());
+        }
+
+        #[test]
+        fn test_jit_anchors() {
+            // Start anchor
+            let jit = make_jit_with_anchors(r"^hello").unwrap();
+            assert!(jit.find(b"hello world").is_some());
+            assert!(jit.find(b"say hello").is_none());
+            assert!(jit.find(b"  hello").is_none());
+
+            // End anchor
+            let jit = make_jit_with_anchors(r"world$").unwrap();
+            assert!(jit.find(b"hello world").is_some());
+            assert!(jit.find(b"world is big").is_none());
+
+            // Both anchors
+            let jit = make_jit_with_anchors(r"^hello$").unwrap();
+            assert!(jit.find(b"hello").is_some());
+            assert!(jit.find(b"hello world").is_none());
+            assert!(jit.find(b"say hello").is_none());
         }
     }
 

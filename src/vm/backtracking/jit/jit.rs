@@ -207,14 +207,4 @@ mod tests {
         assert_eq!(caps[1], Some((0, 1))); // Group 1: "a"
         assert_eq!(caps[2], Some((1, 2))); // Group 2: "b"
     }
-
-    #[test]
-    #[ignore = "greedy + backref requires full backtracking, not yet implemented"]
-    fn test_repetition_backref() {
-        let jit = compile_pattern(r"(a+)\1").unwrap();
-        assert!(jit.is_match(b"aa"));
-        assert!(jit.is_match(b"aaaa"));
-        assert!(jit.is_match(b"aaaaaa"));
-        assert!(!jit.is_match(b"aaa")); // "aaa" can't split evenly
-    }
 }

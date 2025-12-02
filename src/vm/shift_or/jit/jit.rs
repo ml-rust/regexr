@@ -30,6 +30,10 @@ pub struct JitShiftOr {
     has_leading_wb: bool,
     /// Whether pattern has trailing word boundary.
     has_trailing_wb: bool,
+    /// Whether the pattern has a start anchor (^).
+    has_start_anchor: bool,
+    /// Whether the pattern has an end anchor ($).
+    has_end_anchor: bool,
 }
 
 impl std::fmt::Debug for JitShiftOr {
@@ -39,6 +43,8 @@ impl std::fmt::Debug for JitShiftOr {
             .field("position_count", &self.position_count)
             .field("has_leading_wb", &self.has_leading_wb)
             .field("has_trailing_wb", &self.has_trailing_wb)
+            .field("has_start_anchor", &self.has_start_anchor)
+            .field("has_end_anchor", &self.has_end_anchor)
             .finish()
     }
 }
@@ -63,6 +69,8 @@ impl JitShiftOr {
         nullable: bool,
         has_leading_wb: bool,
         has_trailing_wb: bool,
+        has_start_anchor: bool,
+        has_end_anchor: bool,
     ) -> Self {
         Self {
             code,
@@ -75,6 +83,8 @@ impl JitShiftOr {
             nullable,
             has_leading_wb,
             has_trailing_wb,
+            has_start_anchor,
+            has_end_anchor,
         }
     }
 
@@ -93,21 +103,69 @@ impl JitShiftOr {
             return self.find_with_word_boundaries(input);
         }
 
+        // Handle start anchor: only try matching at position 0
+        if self.has_start_anchor {
+            if let Some(end) = self.match_at(input) {
+                // For end anchor: must match entire input
+                if self.has_end_anchor && end != input.len() {
+                    return None;
+                }
+                return Some((0, end));
+            }
+            // If pattern is nullable with start anchor, return empty match at 0
+            if self.nullable {
+                if self.has_end_anchor {
+                    if input.is_empty() {
+                        return Some((0, 0));
+                    }
+                    return None;
+                }
+                return Some((0, 0));
+            }
+            return None;
+        }
+
         // Try to find a non-empty match first (greedy)
         if !input.is_empty() {
             let result = self.call_find(input);
             if result >= 0 {
                 // JIT returns packed (start << 32 | end)
                 let packed = result as u64;
-                return Some(((packed >> 32) as usize, (packed & 0xFFFF_FFFF) as usize));
+                let start = (packed >> 32) as usize;
+                let end = (packed & 0xFFFF_FFFF) as usize;
+
+                // For end anchor: only accept matches that end at input end
+                if self.has_end_anchor && end != input.len() {
+                    // Need to search for a match that ends at input.len()
+                    return self.find_with_end_anchor(input);
+                }
+                return Some((start, end));
             }
         }
 
-        // If pattern is nullable and no non-empty match found, return empty match at 0
+        // If pattern is nullable and no non-empty match found, return empty match
         if self.nullable {
+            if self.has_end_anchor {
+                return Some((input.len(), input.len()));
+            }
             return Some((0, 0));
         }
 
+        None
+    }
+
+    /// Find a match that ends at input.len() (for end anchor).
+    fn find_with_end_anchor(&self, input: &[u8]) -> Option<(usize, usize)> {
+        for start in 0..=input.len() {
+            if let Some(end) = self.match_at(&input[start..]) {
+                if start + end == input.len() {
+                    return Some((start, start + end));
+                }
+            }
+        }
+        if self.nullable {
+            return Some((input.len(), input.len()));
+        }
         None
     }
 
@@ -210,11 +268,40 @@ impl JitShiftOr {
 
     /// Finds a match at or after position.
     pub fn find_at(&self, input: &[u8], pos: usize) -> Option<(usize, usize)> {
-        if pos >= input.len() {
+        if pos > input.len() {
             return None;
         }
 
-        // For now, delegate to find on slice and adjust positions
+        // For start anchor, can only match at position 0
+        if self.has_start_anchor {
+            if pos > 0 {
+                return None;
+            }
+            if let Some(end) = self.match_at(input) {
+                if self.has_end_anchor && end != input.len() {
+                    return None;
+                }
+                return Some((0, end));
+            }
+            return None;
+        }
+
+        // For end anchor, only accept matches that end at input.len()
+        if self.has_end_anchor {
+            for start in pos..=input.len() {
+                if let Some(end) = self.match_at(&input[start..]) {
+                    if start + end == input.len() {
+                        return Some((start, start + end));
+                    }
+                }
+            }
+            return None;
+        }
+
+        // No anchors: delegate to find on slice and adjust positions
+        if pos >= input.len() {
+            return None;
+        }
         self.find(&input[pos..]).map(|(s, e)| (pos + s, pos + e))
     }
 
@@ -222,13 +309,24 @@ impl JitShiftOr {
     /// Returns (start, end) if matched, None otherwise.
     /// Use this when you know the match should start at exactly `pos` (e.g., from a prefilter).
     pub fn try_match_at(&self, input: &[u8], pos: usize) -> Option<(usize, usize)> {
-        if pos >= input.len() {
+        // For start anchor: only position 0 can match
+        if self.has_start_anchor && pos != 0 {
+            return None;
+        }
+
+        if pos > input.len() {
             return None;
         }
 
         // Check if the pattern matches at exactly position 0 of the slice
         let slice = &input[pos..];
-        self.find(slice)
-            .and_then(|(s, e)| if s == 0 { Some((pos, pos + e)) } else { None })
+        if let Some(end) = self.match_at(slice) {
+            // For end anchor: must match to end of input
+            if self.has_end_anchor && pos + end != input.len() {
+                return None;
+            }
+            return Some((pos, pos + end));
+        }
+        None
     }
 }

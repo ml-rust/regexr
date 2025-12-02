@@ -51,6 +51,10 @@ pub struct ShiftOr {
     pub(crate) has_leading_word_boundary: bool,
     /// Whether the pattern has a trailing word boundary (\b at end).
     pub(crate) has_trailing_word_boundary: bool,
+    /// Whether the pattern has a start anchor (^).
+    pub(crate) has_start_anchor: bool,
+    /// Whether the pattern has an end anchor ($).
+    pub(crate) has_end_anchor: bool,
 }
 
 impl ShiftOr {
@@ -78,9 +82,32 @@ impl ShiftOr {
         Self::from_glushkov_with_boundaries(&glushkov, false, false)
     }
 
+    /// Tries to compile an HIR with anchors into a Shift-Or matcher.
+    /// Supports non-multiline ^ and $ anchors.
+    /// Returns None if the pattern is not suitable for Shift-Or.
+    pub fn from_hir_with_anchors(hir: &Hir) -> Option<Self> {
+        // Skip patterns with unsupported features
+        if hir.props.has_backrefs
+            || hir.props.has_lookaround
+            || hir.props.has_word_boundary
+            || hir.props.has_non_greedy
+        {
+            return None;
+        }
+
+        // Build Glushkov NFA (epsilon-free) - anchors are treated as empty
+        let glushkov = compile_glushkov(hir)?;
+
+        // Detect anchor types from HIR properties
+        let has_start_anchor = hir.props.has_start_anchor;
+        let has_end_anchor = hir.props.has_end_anchor;
+
+        Self::from_glushkov_with_options(&glushkov, false, false, has_start_anchor, has_end_anchor)
+    }
+
     /// Creates a Shift-Or matcher from a Glushkov NFA.
     pub fn from_glushkov(nfa: &GlushkovNfa) -> Option<Self> {
-        Self::from_glushkov_with_boundaries(nfa, false, false)
+        Self::from_glushkov_with_options(nfa, false, false, false, false)
     }
 
     /// Creates a Shift-Or matcher from a Glushkov NFA with word boundary info.
@@ -88,6 +115,23 @@ impl ShiftOr {
         nfa: &GlushkovNfa,
         has_leading_word_boundary: bool,
         has_trailing_word_boundary: bool,
+    ) -> Option<Self> {
+        Self::from_glushkov_with_options(
+            nfa,
+            has_leading_word_boundary,
+            has_trailing_word_boundary,
+            false,
+            false,
+        )
+    }
+
+    /// Creates a Shift-Or matcher from a Glushkov NFA with all options.
+    fn from_glushkov_with_options(
+        nfa: &GlushkovNfa,
+        has_leading_word_boundary: bool,
+        has_trailing_word_boundary: bool,
+        has_start_anchor: bool,
+        has_end_anchor: bool,
     ) -> Option<Self> {
         if nfa.position_count > MAX_POSITIONS || nfa.position_count == 0 {
             return None;
@@ -105,6 +149,8 @@ impl ShiftOr {
             position_count: nfa.position_count,
             has_leading_word_boundary,
             has_trailing_word_boundary,
+            has_start_anchor,
+            has_end_anchor,
         })
     }
 
@@ -167,15 +213,35 @@ impl ShiftOr {
 
     /// Finds the first match, returning (start, end).
     pub fn find(&self, input: &[u8]) -> Option<(usize, usize)> {
+        // For start anchor: only try matching at position 0
+        if self.has_start_anchor {
+            if let Some(end) = self.match_at(input, 0) {
+                // For end anchor: only accept if match ends at input end
+                if self.has_end_anchor && end != input.len() {
+                    return None;
+                }
+                return Some((0, end));
+            }
+            // If pattern is nullable and has both anchors, empty match at 0 only if input is empty
+            if self.nullable && (!self.has_end_anchor || input.is_empty()) {
+                return Some((0, 0));
+            }
+            return None;
+        }
+
         // Try matching at each position, preferring longest match (greedy)
         for start in 0..=input.len() {
             if let Some(end) = self.match_at(input, start) {
+                // For end anchor: only accept if match ends at input end
+                if self.has_end_anchor && end != input.len() {
+                    continue;
+                }
                 return Some((start, end));
             }
         }
 
         // If pattern is nullable and no non-empty match found, return empty match at 0
-        if self.nullable {
+        if self.nullable && !self.has_end_anchor {
             return Some((0, 0));
         }
 
@@ -189,10 +255,29 @@ impl ShiftOr {
             return None;
         }
 
+        // For start anchor: can only match at position 0
+        if self.has_start_anchor && pos > 0 {
+            return None;
+        }
+
+        let search_start = if self.has_start_anchor { 0 } else { pos };
+
         // Try matching at each position from pos
-        for start in pos..=input.len() {
+        for start in search_start..=input.len() {
             if let Some(end) = self.match_at(input, start) {
+                // For end anchor: only accept if match ends at input end
+                if self.has_end_anchor && end != input.len() {
+                    if self.has_start_anchor {
+                        // Can't match anywhere else
+                        return None;
+                    }
+                    continue;
+                }
                 return Some((start, end));
+            }
+            // For start anchor: only one position to try
+            if self.has_start_anchor {
+                break;
             }
         }
         None
@@ -202,7 +287,20 @@ impl ShiftOr {
     /// Returns (start, end) if matched, None otherwise.
     /// Use this when you know the match should start at exactly `pos` (e.g., from a prefilter).
     pub fn try_match_at(&self, input: &[u8], pos: usize) -> Option<(usize, usize)> {
-        self.match_at(input, pos).map(|end| (pos, end))
+        // For start anchor: only position 0 can match
+        if self.has_start_anchor && pos != 0 {
+            return None;
+        }
+        match self.match_at(input, pos) {
+            Some(end) => {
+                // For end anchor: must match to end of input
+                if self.has_end_anchor && end != input.len() {
+                    return None;
+                }
+                Some((pos, end))
+            }
+            None => None,
+        }
     }
 
     /// Attempts to match at a specific position.
@@ -268,14 +366,15 @@ impl ShiftOr {
 
 /// Checks if an HIR is suitable for Shift-Or.
 pub fn is_shift_or_compatible(hir: &Hir) -> bool {
-    // Anchors (^, $), backrefs, lookarounds, and word boundaries require different engines.
+    // Backrefs, lookarounds, and word boundaries require different engines.
     // Word boundaries (\b, \B) are complex to handle correctly in shift-or;
     // LazyDFA handles them properly with character-class augmented states.
     // Non-greedy quantifiers (.*?, .+?) require tracking match preference which
     // Glushkov NFA doesn't preserve - use TaggedNFA or PikeVM instead.
+    // Multiline anchors ((?m)^, (?m)$) need position-aware matching via LazyDFA.
     if hir.props.has_backrefs
         || hir.props.has_lookaround
-        || hir.props.has_anchors
+        || hir.props.has_multiline_anchors
         || hir.props.has_word_boundary
         || hir.props.has_non_greedy
     {

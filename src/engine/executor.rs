@@ -566,7 +566,13 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
         EngineType::ShiftOr => {
             // Use Glushkov NFA for Shift-Or
             // Keep Thompson NFA for captures (two-pass strategy)
-            match ShiftOr::from_hir(hir) {
+            // Use from_hir_with_anchors for patterns with non-multiline anchors
+            let shift_or = if hir.props.has_anchors {
+                ShiftOr::from_hir_with_anchors(hir)
+            } else {
+                ShiftOr::from_hir(hir)
+            };
+            match shift_or {
                 Some(so) => {
                     let capture_nfa = nfa::compile(hir)?;
                     (CompiledInner::ShiftOr(so), Some(capture_nfa))
@@ -605,10 +611,12 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
             let nfa = nfa::compile(hir)?;
             let capture_nfa = Some(nfa.clone());
 
-            // For patterns with large Unicode classes, use LazyDfa to avoid
-            // state explosion during EagerDfa materialization. EagerDfa creates
-            // all reachable states upfront, which can be millions for large Unicode classes.
-            if hir.props.has_large_unicode_class {
+            // Use LazyDfa (not EagerDfa) for:
+            // - Large Unicode classes: avoid state explosion during materialization
+            // - Patterns with anchors: EagerDfa doesn't handle anchors correctly
+            // EagerDfa creates all reachable states upfront, which can be millions
+            // for large Unicode classes.
+            if hir.props.has_large_unicode_class || hir.props.has_anchors {
                 (
                     CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))),
                     capture_nfa,
@@ -627,8 +635,8 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
             let nfa = nfa::compile(hir)?;
             let capture_nfa = Some(nfa.clone());
 
-            // For patterns with large Unicode classes, use LazyDfa to avoid state explosion
-            if hir.props.has_large_unicode_class {
+            // Use LazyDfa for patterns with large Unicode classes or anchors
+            if hir.props.has_large_unicode_class || hir.props.has_anchors {
                 (
                     CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))),
                     capture_nfa,
@@ -874,10 +882,15 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
         let prefilter = Prefilter::from_literals(&literals);
 
         // Use JitShiftOr when:
-        // 1. Pattern is ShiftOr-compatible (≤64 positions, no anchors/word boundaries)
+        // 1. Pattern is ShiftOr-compatible (≤64 positions, no multiline anchors/word boundaries)
         // 2. No effective prefilter (DFA JIT doesn't benefit as much)
         if !prefilter.is_effective() && is_shift_or_compatible(hir) {
-            if let Some(shift_or) = crate::vm::ShiftOr::from_hir(hir) {
+            let shift_or = if hir.props.has_anchors {
+                crate::vm::ShiftOr::from_hir_with_anchors(hir)
+            } else {
+                crate::vm::ShiftOr::from_hir(hir)
+            };
+            if let Some(shift_or) = shift_or {
                 if let Some(jit_shift_or) = jit::JitShiftOr::compile(&shift_or) {
                     let capture_nfa = if hir.props.capture_count > 0 {
                         nfa::compile(hir).ok()

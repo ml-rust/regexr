@@ -32,6 +32,12 @@ pub struct HirProps {
     /// Whether the pattern contains positional anchors (^, $).
     /// These require matching at specific input positions.
     pub has_anchors: bool,
+    /// Whether the pattern has a start anchor (^).
+    pub has_start_anchor: bool,
+    /// Whether the pattern has an end anchor ($).
+    pub has_end_anchor: bool,
+    /// Whether the pattern has multiline anchors ((?m)^ or (?m)$).
+    pub has_multiline_anchors: bool,
     /// Whether the pattern contains word boundaries (\b, \B).
     /// These can be handled by DFA with position tracking.
     pub has_word_boundary: bool,

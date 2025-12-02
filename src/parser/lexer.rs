@@ -431,48 +431,57 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Lexes a Unicode property escape (\p{Name} or \P{Name}).
+    /// Lexes a Unicode property escape.
+    ///
+    /// Supports two syntaxes:
+    /// - `\p{Name}` or `\P{Name}` - full property name in braces
+    /// - `\pL` or `\PL` - single-letter shorthand for general categories
     fn lex_unicode_property(&mut self, start: usize) -> Result<String> {
-        // Expect opening brace
-        match self.next_char() {
-            Some((_, '{')) => {}
-            _ => {
-                return Err(Error::with_span(
-                    ErrorKind::InvalidUnicodeProperty,
-                    self.src,
-                    Span::new(start, self.pos),
-                ));
-            }
-        }
+        match self.peek_char() {
+            Some('{') => {
+                // Brace syntax: \p{Name}
+                self.next_char(); // consume '{'
 
-        let mut name = String::new();
+                let mut name = String::new();
 
-        // Read property name until closing brace
-        loop {
-            match self.next_char() {
-                Some((_, '}')) => break,
-                Some((_, c)) if c.is_alphanumeric() || c == '_' || c == '-' => {
-                    name.push(c);
+                // Read property name until closing brace
+                loop {
+                    match self.next_char() {
+                        Some((_, '}')) => break,
+                        Some((_, c)) if c.is_alphanumeric() || c == '_' || c == '-' => {
+                            name.push(c);
+                        }
+                        _ => {
+                            return Err(Error::with_span(
+                                ErrorKind::InvalidUnicodeProperty,
+                                self.src,
+                                Span::new(start, self.pos),
+                            ));
+                        }
+                    }
                 }
-                _ => {
+
+                if name.is_empty() {
                     return Err(Error::with_span(
                         ErrorKind::InvalidUnicodeProperty,
                         self.src,
                         Span::new(start, self.pos),
                     ));
                 }
-            }
-        }
 
-        if name.is_empty() {
-            return Err(Error::with_span(
+                Ok(name)
+            }
+            Some(c) if c.is_ascii_alphabetic() => {
+                // Shorthand syntax: \pL (single letter)
+                self.next_char(); // consume the letter
+                Ok(c.to_string())
+            }
+            _ => Err(Error::with_span(
                 ErrorKind::InvalidUnicodeProperty,
                 self.src,
                 Span::new(start, self.pos),
-            ));
+            )),
         }
-
-        Ok(name)
     }
 
     /// Lexes a backreference (\1, \12, etc.).
@@ -650,8 +659,39 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_unicode_property_no_brace() {
-        let err = lex_all(r"\pL").unwrap_err();
+    fn test_unicode_property_shorthand() {
+        // Single-letter shorthand syntax
+        let tokens = lex_all(r"\pL").unwrap();
+        assert_eq!(
+            tokens,
+            vec![TokenKind::Escape(EscapeKind::UnicodeProperty(
+                "L".to_string()
+            ))]
+        );
+
+        // Negated shorthand
+        let tokens = lex_all(r"\PN").unwrap();
+        assert_eq!(
+            tokens,
+            vec![TokenKind::Escape(EscapeKind::NotUnicodeProperty(
+                "N".to_string()
+            ))]
+        );
+
+        // Lowercase also works
+        let tokens = lex_all(r"\ps").unwrap();
+        assert_eq!(
+            tokens,
+            vec![TokenKind::Escape(EscapeKind::UnicodeProperty(
+                "s".to_string()
+            ))]
+        );
+    }
+
+    #[test]
+    fn test_invalid_unicode_property_no_char() {
+        // \p followed by non-alphabetic, non-brace should fail
+        let err = lex_all(r"\p1").unwrap_err();
         assert!(matches!(err.kind(), ErrorKind::InvalidUnicodeProperty));
     }
 
