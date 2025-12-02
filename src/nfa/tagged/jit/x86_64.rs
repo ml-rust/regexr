@@ -39,9 +39,11 @@ pub(super) struct TaggedNfaJitCompiler {
     add_thread_label: dynasmrt::DynamicLabel,
     /// CodepointClasses collected during pattern extraction.
     /// Boxed to ensure stable addresses for JIT code references.
+    #[allow(clippy::vec_box)]
     codepoint_classes: Vec<Box<CodepointClass>>,
     /// Lookaround NFAs collected during pattern extraction.
     /// Boxed to ensure stable addresses for JIT helper function references.
+    #[allow(clippy::vec_box)]
     lookaround_nfas: Vec<Box<Nfa>>,
 }
 
@@ -176,21 +178,22 @@ impl TaggedNfaJitCompiler {
         self.finalize(find_offset, captures_offset, false, steps)
     }
 
-    /// Generates JIT code for simple linear patterns (literals).
-    ///
-    /// For a pattern like "abc", generates code that:
-    /// 1. Tries each starting position
-    /// 2. At each position, walks the linear NFA chain
-    /// 3. Returns on first match
-    ///
-    /// Register allocation (System V AMD64 ABI):
-    /// - rdi = input_ptr (argument, then scratch)
-    /// - rsi = input_len (argument)
-    /// - rbx = input_ptr (callee-saved)
-    /// - r12 = input_len (callee-saved)
-    /// - r13 = start_pos for current attempt (callee-saved)
-    /// - r14 = current_pos (absolute position in input) (callee-saved)
-    /// - rax = scratch / return value
+    // Generates JIT code for simple linear patterns (literals).
+    //
+    // For a pattern like "abc", generates code that:
+    // 1. Tries each starting position
+    // 2. At each position, walks the linear NFA chain
+    // 3. Returns on first match
+    //
+    // Register allocation (System V AMD64 ABI):
+    // - rdi = input_ptr (argument, then scratch)
+    // - rsi = input_len (argument)
+    // - rbx = input_ptr (callee-saved)
+    // - r12 = input_len (callee-saved)
+    // - r13 = start_pos for current attempt (callee-saved)
+    // - r14 = current_pos (absolute position in input) (callee-saved)
+    // - rax = scratch / return value
+
     /// Check if pattern contains backreferences (recursively in alternations).
     fn has_backref(steps: &[PatternStep]) -> bool {
         steps.iter().any(|s| match s {
@@ -252,7 +255,7 @@ impl TaggedNfaJitCompiler {
                 // Consumes input if any alternative consumes input
                 alternatives
                     .iter()
-                    .any(|alt| alt.iter().any(|s| Self::step_consumes_input(s)))
+                    .any(|alt| alt.iter().any(Self::step_consumes_input))
             }
 
             // Zero-width assertions don't consume input
@@ -321,7 +324,22 @@ impl TaggedNfaJitCompiler {
             return self.finalize(find_offset, captures_offset, true, None);
         }
 
-        // Prologue
+        // Prologue - save callee-saved registers
+        #[cfg(target_os = "windows")]
+        dynasm!(self.asm
+            ; push rdi          // Callee-saved on Windows
+            ; push rsi          // Callee-saved on Windows
+            ; push rbx
+            ; push r12
+            ; push r13
+            ; push r14
+            ; push r15
+            // Windows: args in RCX, RDX -> move to RDI, RSI for internal use
+            ; mov rdi, rcx
+            ; mov rsi, rdx
+        );
+
+        #[cfg(not(target_os = "windows"))]
         dynasm!(self.asm
             ; push rbx
             ; push r12
@@ -331,7 +349,7 @@ impl TaggedNfaJitCompiler {
         );
 
         // Set up registers
-        // rdi = input_ptr, rsi = input_len, rdx = ctx (unused)
+        // rdi = input_ptr, rsi = input_len (after platform-specific setup)
         dynasm!(self.asm
             ; mov rbx, rdi      // rbx = input_ptr
             ; mov r12, rsi      // r12 = input_len
@@ -387,7 +405,7 @@ impl TaggedNfaJitCompiler {
                 PatternStep::GreedyPlus(byte_class) => {
                     // Check if there are remaining steps that consume input
                     let remaining = &steps[step_idx + 1..];
-                    let needs_backtrack = remaining.iter().any(|s| Self::step_consumes_input(s));
+                    let needs_backtrack = remaining.iter().any(Self::step_consumes_input);
 
                     if needs_backtrack {
                         // Backtracking version: greedily match, then try remaining, backtrack on failure
@@ -430,7 +448,7 @@ impl TaggedNfaJitCompiler {
                 PatternStep::GreedyStar(byte_class) => {
                     // Check if there are remaining steps that consume input
                     let remaining = &steps[step_idx + 1..];
-                    let needs_backtrack = remaining.iter().any(|s| Self::step_consumes_input(s));
+                    let needs_backtrack = remaining.iter().any(Self::step_consumes_input);
 
                     if needs_backtrack {
                         // Backtracking version
@@ -563,7 +581,7 @@ impl TaggedNfaJitCompiler {
                 PatternStep::GreedyCodepointPlus(cpclass) => {
                     // Check if there are remaining steps that consume input
                     let remaining = &steps[step_idx + 1..];
-                    let needs_backtrack = remaining.iter().any(|s| Self::step_consumes_input(s));
+                    let needs_backtrack = remaining.iter().any(Self::step_consumes_input);
 
                     if needs_backtrack {
                         // Backtracking version: greedily match UTF-8, then try remaining, backtrack on failure
@@ -890,8 +908,22 @@ impl TaggedNfaJitCompiler {
             ; mov rax, r13
             ; shl rax, 32               // rax = start << 32
             ; or rax, r14               // rax = (start << 32) | end
+        );
 
-            // Epilogue
+        // Epilogue - restore callee-saved registers
+        #[cfg(target_os = "windows")]
+        dynasm!(self.asm
+            ; pop r15
+            ; pop r14
+            ; pop r13
+            ; pop r12
+            ; pop rbx
+            ; pop rsi
+            ; pop rdi
+            ; ret
+        );
+        #[cfg(not(target_os = "windows"))]
+        dynasm!(self.asm
             ; pop r15
             ; pop r14
             ; pop r13
@@ -904,8 +936,22 @@ impl TaggedNfaJitCompiler {
         dynasm!(self.asm
             ; =>no_match
             ; mov rax, -1i32
+        );
 
-            // Epilogue
+        // Epilogue - restore callee-saved registers
+        #[cfg(target_os = "windows")]
+        dynasm!(self.asm
+            ; pop r15
+            ; pop r14
+            ; pop r13
+            ; pop r12
+            ; pop rbx
+            ; pop rsi
+            ; pop rdi
+            ; ret
+        );
+        #[cfg(not(target_os = "windows"))]
+        dynasm!(self.asm
             ; pop r15
             ; pop r14
             ; pop r13
@@ -1032,13 +1078,8 @@ impl TaggedNfaJitCompiler {
             let is_last = alt_idx == alternatives.len() - 1;
 
             // Create label for trying next alternative (or cleanup for last)
-            let try_next_alt = if is_last {
-                // Last alternative - if it fails, we need to clean up and fail
-                let cleanup_label = self.asm.new_dynamic_label();
-                cleanup_label
-            } else {
-                self.asm.new_dynamic_label()
-            };
+            // Last alternative - if it fails, we need to clean up and fail
+            let try_next_alt = self.asm.new_dynamic_label();
 
             // Emit code for each step in this alternative
             for alt_step in alt_steps.iter() {
@@ -3609,7 +3650,14 @@ impl TaggedNfaJitCompiler {
         self.codepoint_classes.push(cpclass_box);
 
         // Helper function that checks membership
-        // Must use extern "sysv64" for System V AMD64 ABI
+        // Use platform-specific calling convention
+        #[cfg(target_os = "windows")]
+        extern "win64" fn check_membership(codepoint: u32, cpclass: *const CodepointClass) -> bool {
+            let cpclass = unsafe { &*cpclass };
+            cpclass.contains(codepoint)
+        }
+
+        #[cfg(not(target_os = "windows"))]
         extern "sysv64" fn check_membership(
             codepoint: u32,
             cpclass: *const CodepointClass,
@@ -3618,13 +3666,40 @@ impl TaggedNfaJitCompiler {
             cpclass.contains(codepoint)
         }
 
-        let check_fn: extern "sysv64" fn(u32, *const CodepointClass) -> bool = check_membership;
-        let check_fn_ptr = check_fn as usize as i64;
+        #[cfg(target_os = "windows")]
+        let check_fn_ptr = {
+            let check_fn: extern "win64" fn(u32, *const CodepointClass) -> bool = check_membership;
+            check_fn as usize as i64
+        };
 
-        // Call the helper function
-        // System V ABI: rdi = first arg (codepoint), rsi = second arg (cpclass ptr)
+        #[cfg(not(target_os = "windows"))]
+        let check_fn_ptr = {
+            let check_fn: extern "sysv64" fn(u32, *const CodepointClass) -> bool = check_membership;
+            check_fn as usize as i64
+        };
+
+        // Call the helper function with platform-specific calling convention
+        #[cfg(target_os = "windows")]
         dynasm!(self.asm
             // eax already contains codepoint
+            // Windows x64: args in RCX, RDX
+            ; mov ecx, eax                    // rcx = codepoint (zero-extended)
+            ; mov rdx, QWORD cpclass_ptr as i64  // rdx = cpclass pointer
+            ; sub rsp, 32                     // Shadow space
+            ; mov rax, QWORD check_fn_ptr     // Load function pointer
+            ; call rax                        // Call check_membership
+            ; add rsp, 32                     // Restore stack
+
+            // rax (al) = result: true (1) if in class, false (0) if not
+            ; test al, al
+            ; jz =>fail_label                 // If false, jump to fail
+            ; jmp =>check_done
+        );
+
+        #[cfg(not(target_os = "windows"))]
+        dynasm!(self.asm
+            // eax already contains codepoint
+            // System V ABI: args in RDI, RSI
             ; mov edi, eax                    // rdi = codepoint (zero-extended)
             ; mov rsi, QWORD cpclass_ptr as i64  // rsi = cpclass pointer
             ; mov rax, QWORD check_fn_ptr     // Load function pointer
@@ -3857,19 +3932,32 @@ impl TaggedNfaJitCompiler {
 
         // Prologue - save callee-saved registers
         // On function entry: RSP is 8-mod-16 (return address pushed)
-        // 5 pushes = 40 bytes -> RSP is (8+40) = 48 = 0 mod 16 -> aligned!
-        // No sub rsp needed for alignment
+        #[cfg(target_os = "windows")]
+        dynasm!(self.asm
+            ; push rdi          // Callee-saved on Windows
+            ; push rsi          // Callee-saved on Windows
+            ; push rbx
+            ; push r12
+            ; push r13
+            ; push r14
+            ; push r15
+            // Windows x64: args in RCX, RDX, R8, R9
+            // RCX=input_ptr, RDX=input_len, R8=ctx (unused), R9=captures_out
+            ; mov rbx, rcx      // rbx = input_ptr
+            ; mov r12, rdx      // r12 = input_len
+            ; mov r15, r9       // r15 = captures_out pointer
+            ; xor r13d, r13d    // r13 = start_pos = 0
+        );
+
+        #[cfg(not(target_os = "windows"))]
         dynasm!(self.asm
             ; push rbx
             ; push r12
             ; push r13
             ; push r14
             ; push r15
-        );
-
-        // Set up registers
-        // rdi = input_ptr, rsi = input_len, rdx = ctx (unused), rcx = captures_out
-        dynasm!(self.asm
+            // System V AMD64: args in RDI, RSI, RDX, RCX
+            // rdi = input_ptr, rsi = input_len, rdx = ctx (unused), rcx = captures_out
             ; mov rbx, rdi      // rbx = input_ptr
             ; mov r12, rsi      // r12 = input_len
             ; mov r15, rcx      // r15 = captures_out pointer
@@ -3945,6 +4033,22 @@ impl TaggedNfaJitCompiler {
             ; mov rax, r13
             ; shl rax, 32
             ; or rax, r14
+        );
+
+        // Epilogue - restore callee-saved registers
+        #[cfg(target_os = "windows")]
+        dynasm!(self.asm
+            ; pop r15
+            ; pop r14
+            ; pop r13
+            ; pop r12
+            ; pop rbx
+            ; pop rsi
+            ; pop rdi
+            ; ret
+        );
+        #[cfg(not(target_os = "windows"))]
+        dynasm!(self.asm
             ; pop r15
             ; pop r14
             ; pop r13
@@ -3957,6 +4061,22 @@ impl TaggedNfaJitCompiler {
         dynasm!(self.asm
             ; =>no_match
             ; mov rax, -1i32
+        );
+
+        // Epilogue - restore callee-saved registers
+        #[cfg(target_os = "windows")]
+        dynasm!(self.asm
+            ; pop r15
+            ; pop r14
+            ; pop r13
+            ; pop r12
+            ; pop rbx
+            ; pop rsi
+            ; pop rdi
+            ; ret
+        );
+        #[cfg(not(target_os = "windows"))]
+        dynasm!(self.asm
             ; pop r15
             ; pop r14
             ; pop r13
@@ -4521,8 +4641,6 @@ impl TaggedNfaJitCompiler {
         visited: &mut [bool],
         end_state: Option<StateId>,
     ) -> Vec<PatternStep> {
-        use crate::nfa::NfaInstruction;
-
         let mut steps = Vec::new();
         let mut current = start;
 
@@ -4664,8 +4782,7 @@ impl TaggedNfaJitCompiler {
                 }
 
                 // Extract the ranges for this step
-                let ranges: Vec<ByteRange> =
-                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| *r).collect();
 
                 // Check if target state forms a loop (greedy or non-greedy)
                 let target_state = &self.nfa.states[target as usize];
@@ -4760,11 +4877,8 @@ impl TaggedNfaJitCompiler {
                                 pattern_state.transitions.iter().all(|(_, t)| *t == target);
 
                             if all_same_target {
-                                let ranges: Vec<ByteRange> = pattern_state
-                                    .transitions
-                                    .iter()
-                                    .map(|(r, _)| r.clone())
-                                    .collect();
+                                let ranges: Vec<ByteRange> =
+                                    pattern_state.transitions.iter().map(|(r, _)| *r).collect();
 
                                 // Find the exit state (after the NonGreedyExit marker)
                                 let exit_state = eps0_state.epsilon[0];
@@ -4870,8 +4984,7 @@ impl TaggedNfaJitCompiler {
                     return Vec::new(); // Different targets
                 }
 
-                let ranges: Vec<ByteRange> =
-                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| *r).collect();
 
                 // Check for greedy plus pattern: current -[byte]-> target -[eps]-> current (loop back)
                 //                                              |-> next (exit)
@@ -4990,11 +5103,7 @@ impl TaggedNfaJitCompiler {
             return None;
         }
 
-        let ranges: Vec<ByteRange> = loop_state
-            .transitions
-            .iter()
-            .map(|(r, _)| r.clone())
-            .collect();
+        let ranges: Vec<ByteRange> = loop_state.transitions.iter().map(|(r, _)| *r).collect();
 
         // The target should have epsilon back to branch_state (completing the loop)
         let target_state = &inner_nfa.states[target as usize];
@@ -5080,8 +5189,6 @@ impl TaggedNfaJitCompiler {
         alt_start: StateId,
         depth: usize,
     ) -> Option<StateId> {
-        use crate::nfa::NfaInstruction;
-
         // Limit recursion depth to prevent stack overflow
         if depth > 20 {
             return None;
@@ -5207,8 +5314,7 @@ impl TaggedNfaJitCompiler {
                     return None;
                 }
 
-                let ranges: Vec<ByteRange> =
-                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| *r).collect();
 
                 return if ranges.len() == 1 && ranges[0].start == ranges[0].end {
                     Some(PatternStep::Byte(ranges[0].start))
@@ -5272,10 +5378,30 @@ impl TaggedNfaJitCompiler {
             )
         })?;
 
-        // Get function pointers
-        let find_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64 =
-            unsafe { std::mem::transmute(code.ptr(find_offset)) };
+        // Get function pointers with platform-specific calling convention
+        #[cfg(target_os = "windows")]
+        let find_fn: unsafe extern "win64" fn(
+            *const u8,
+            usize,
+            *mut TaggedNfaContext,
+        ) -> i64 = unsafe { std::mem::transmute(code.ptr(find_offset)) };
 
+        #[cfg(not(target_os = "windows"))]
+        let find_fn: unsafe extern "sysv64" fn(
+            *const u8,
+            usize,
+            *mut TaggedNfaContext,
+        ) -> i64 = unsafe { std::mem::transmute(code.ptr(find_offset)) };
+
+        #[cfg(target_os = "windows")]
+        let captures_fn: unsafe extern "win64" fn(
+            *const u8,
+            usize,
+            *mut TaggedNfaContext,
+            *mut i64,
+        ) -> i64 = unsafe { std::mem::transmute(code.ptr(captures_offset)) };
+
+        #[cfg(not(target_os = "windows"))]
         let captures_fn: unsafe extern "sysv64" fn(
             *const u8,
             usize,

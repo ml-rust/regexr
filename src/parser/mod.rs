@@ -684,7 +684,7 @@ impl<'a> Parser<'a> {
                                 ranges.push(ClassRange::single('-'));
                                 if let Some(code_point_ranges) = unicode_data::get_property(&name) {
                                     for &(start, end) in code_point_ranges {
-                                        if start >= 0xD800 && start <= 0xDFFF {
+                                        if (0xD800..=0xDFFF).contains(&start) {
                                             continue;
                                         }
                                         let start = start.min(0x10FFFF);
@@ -718,7 +718,7 @@ impl<'a> Parser<'a> {
                         // Convert (u32, u32) code point ranges to ClassRange (char-based)
                         for &(start, end) in code_point_ranges {
                             // Skip surrogate range (U+D800-U+DFFF) since they're not valid chars
-                            if start >= 0xD800 && start <= 0xDFFF {
+                            if (0xD800..=0xDFFF).contains(&start) {
                                 continue;
                             }
                             // Clamp end to valid char range
@@ -738,14 +738,14 @@ impl<'a> Parser<'a> {
                                 {
                                     ranges.push(ClassRange::new(s, e));
                                 }
-                            } else if start <= 0xD7FF && end >= 0xD800 && end <= 0xDFFF {
+                            } else if start <= 0xD7FF && (0xD800..=0xDFFF).contains(&end) {
                                 // Range ends in surrogates, truncate
                                 if let (Some(s), Some(e)) =
                                     (char::from_u32(start), char::from_u32(0xD7FF))
                                 {
                                     ranges.push(ClassRange::new(s, e));
                                 }
-                            } else if start >= 0xD800 && start <= 0xDFFF && end > 0xDFFF {
+                            } else if (0xD800..=0xDFFF).contains(&start) && end > 0xDFFF {
                                 // Range starts in surrogates, start from after
                                 if let (Some(s), Some(e)) =
                                     (char::from_u32(0xE000), char::from_u32(end))
@@ -767,7 +767,7 @@ impl<'a> Parser<'a> {
                                 .iter()
                                 .filter(|&&(start, _)| {
                                     // Count how many ranges we actually added
-                                    start < 0xD800 || start > 0xDFFF
+                                    !(0xD800..=0xDFFF).contains(&start)
                                 })
                                 .map(|&(start, end)| {
                                     let start = start.min(0x10FFFF);

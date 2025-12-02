@@ -3,7 +3,7 @@
 //! Tests the interaction between different SIMD components and validates
 //! behavior across various edge cases.
 
-#[cfg(test)]
+#[cfg(all(test, target_arch = "x86_64"))]
 mod integration_tests {
     use crate::simd::*;
 

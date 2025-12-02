@@ -46,19 +46,9 @@ pub struct JitContext {
     pub max_threads: usize,
 }
 
-/// Helper function callable from JIT code to check if a UTF-8 character matches a CodepointClass.
-///
-/// Arguments:
-/// - `input_ptr`: Pointer to the start of the input string
-/// - `pos`: Current position in the input
-/// - `input_len`: Total length of the input
-/// - `cpclass_ptr`: Pointer to the CodepointClass struct
-///
-/// Returns:
-/// - Positive value: The length of the UTF-8 character that matched (1-4 bytes)
-/// - 0 or negative: No match (or position out of bounds)
-#[allow(dead_code)]
-pub unsafe extern "sysv64" fn check_codepoint_class(
+// Implementation for check_codepoint_class (shared by both ABIs)
+#[inline]
+unsafe fn check_codepoint_class_impl(
     input_ptr: *const u8,
     pos: usize,
     input_len: usize,
@@ -132,19 +122,53 @@ pub unsafe extern "sysv64" fn check_codepoint_class(
     }
 }
 
-/// Helper function callable from JIT code to evaluate a positive lookahead assertion.
+/// Helper function callable from JIT code to check if a UTF-8 character matches a CodepointClass.
 ///
 /// Arguments:
 /// - `input_ptr`: Pointer to the start of the input string
 /// - `pos`: Current position in the input
 /// - `input_len`: Total length of the input
-/// - `nfa_ptr`: Pointer to the inner NFA for the lookahead
+/// - `cpclass_ptr`: Pointer to the CodepointClass struct
 ///
 /// Returns:
-/// - 1 if the lookahead matches (pattern found at position)
-/// - 0 if the lookahead does not match
+/// - Positive value: The length of the UTF-8 character that matched (1-4 bytes)
+/// - 0 or negative: No match (or position out of bounds)
 #[allow(dead_code)]
-pub unsafe extern "sysv64" fn check_positive_lookahead(
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+pub unsafe extern "win64" fn check_codepoint_class(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    cpclass_ptr: *const CodepointClass,
+) -> i64 {
+    check_codepoint_class_impl(input_ptr, pos, input_len, cpclass_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+pub unsafe extern "sysv64" fn check_codepoint_class(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    cpclass_ptr: *const CodepointClass,
+) -> i64 {
+    check_codepoint_class_impl(input_ptr, pos, input_len, cpclass_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn check_codepoint_class(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    cpclass_ptr: *const CodepointClass,
+) -> i64 {
+    check_codepoint_class_impl(input_ptr, pos, input_len, cpclass_ptr)
+}
+
+// Implementation for check_positive_lookahead (shared by both ABIs)
+#[inline]
+unsafe fn check_positive_lookahead_impl(
     input_ptr: *const u8,
     pos: usize,
     input_len: usize,
@@ -158,7 +182,6 @@ pub unsafe extern "sysv64" fn check_positive_lookahead(
     let input = std::slice::from_raw_parts(input_ptr, input_len);
     let remaining = &input[pos..];
 
-    // Use PikeVM to check if the pattern matches at the current position
     let vm = crate::vm::PikeVm::new(nfa.clone());
     if vm.is_match(remaining) {
         1
@@ -167,54 +190,101 @@ pub unsafe extern "sysv64" fn check_positive_lookahead(
     }
 }
 
-/// Helper function callable from JIT code to evaluate a negative lookahead assertion.
-///
-/// Arguments:
-/// - `input_ptr`: Pointer to the start of the input string
-/// - `pos`: Current position in the input
-/// - `input_len`: Total length of the input
-/// - `nfa_ptr`: Pointer to the inner NFA for the lookahead
-///
-/// Returns:
-/// - 1 if the lookahead succeeds (pattern NOT found at position)
-/// - 0 if the lookahead fails (pattern was found)
+/// Helper function callable from JIT code to evaluate a positive lookahead assertion.
 #[allow(dead_code)]
-pub unsafe extern "sysv64" fn check_negative_lookahead(
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+pub unsafe extern "win64" fn check_positive_lookahead(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_positive_lookahead_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+pub unsafe extern "sysv64" fn check_positive_lookahead(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_positive_lookahead_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn check_positive_lookahead(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_positive_lookahead_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+// Implementation for check_negative_lookahead (shared by both ABIs)
+#[inline]
+unsafe fn check_negative_lookahead_impl(
     input_ptr: *const u8,
     pos: usize,
     input_len: usize,
     nfa_ptr: *const Nfa,
 ) -> i64 {
     if pos > input_len {
-        return 1; // At invalid position, negative lookahead succeeds
+        return 1;
     }
 
     let nfa = &*nfa_ptr;
     let input = std::slice::from_raw_parts(input_ptr, input_len);
     let remaining = &input[pos..];
 
-    // Use PikeVM to check if the pattern matches at the current position
     let vm = crate::vm::PikeVm::new(nfa.clone());
     if vm.is_match(remaining) {
-        0 // Pattern matched, negative lookahead fails
+        0
     } else {
-        1 // Pattern didn't match, negative lookahead succeeds
+        1
     }
 }
 
-/// Helper function callable from JIT code to evaluate a positive lookbehind assertion.
-///
-/// Arguments:
-/// - `input_ptr`: Pointer to the start of the input string
-/// - `pos`: Current position in the input
-/// - `input_len`: Total length of the input (unused but kept for ABI consistency)
-/// - `nfa_ptr`: Pointer to the inner NFA for the lookbehind
-///
-/// Returns:
-/// - 1 if the lookbehind matches (pattern found ending at position)
-/// - 0 if the lookbehind does not match
+/// Helper function callable from JIT code to evaluate a negative lookahead assertion.
 #[allow(dead_code)]
-pub unsafe extern "sysv64" fn check_positive_lookbehind(
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+pub unsafe extern "win64" fn check_negative_lookahead(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_negative_lookahead_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+pub unsafe extern "sysv64" fn check_negative_lookahead(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_negative_lookahead_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn check_negative_lookahead(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_negative_lookahead_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+// Implementation for check_positive_lookbehind (shared by both ABIs)
+#[inline]
+unsafe fn check_positive_lookbehind_impl(
     input_ptr: *const u8,
     pos: usize,
     _input_len: usize,
@@ -223,13 +293,10 @@ pub unsafe extern "sysv64" fn check_positive_lookbehind(
     let nfa = &*nfa_ptr;
     let input = std::slice::from_raw_parts(input_ptr, pos);
 
-    // Use PikeVM to check if the pattern matches ending at the current position
     let vm = crate::vm::PikeVm::new(nfa.clone());
 
-    // Try all possible start positions before current position
     for lookback_start in 0..=pos {
         let slice = &input[lookback_start..];
-        // Check if pattern matches the entire slice (anchored match)
         if let Some((s, e)) = vm.find(slice) {
             if s == 0 && e == slice.len() {
                 return 1;
@@ -239,19 +306,43 @@ pub unsafe extern "sysv64" fn check_positive_lookbehind(
     0
 }
 
-/// Helper function callable from JIT code to evaluate a negative lookbehind assertion.
-///
-/// Arguments:
-/// - `input_ptr`: Pointer to the start of the input string
-/// - `pos`: Current position in the input
-/// - `input_len`: Total length of the input (unused but kept for ABI consistency)
-/// - `nfa_ptr`: Pointer to the inner NFA for the lookbehind
-///
-/// Returns:
-/// - 1 if the lookbehind succeeds (pattern NOT found ending at position)
-/// - 0 if the lookbehind fails (pattern was found ending at position)
+/// Helper function callable from JIT code to evaluate a positive lookbehind assertion.
 #[allow(dead_code)]
-pub unsafe extern "sysv64" fn check_negative_lookbehind(
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+pub unsafe extern "win64" fn check_positive_lookbehind(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_positive_lookbehind_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+pub unsafe extern "sysv64" fn check_positive_lookbehind(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_positive_lookbehind_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn check_positive_lookbehind(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_positive_lookbehind_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+// Implementation for check_negative_lookbehind (shared by both ABIs)
+#[inline]
+unsafe fn check_negative_lookbehind_impl(
     input_ptr: *const u8,
     pos: usize,
     _input_len: usize,
@@ -260,18 +351,49 @@ pub unsafe extern "sysv64" fn check_negative_lookbehind(
     let nfa = &*nfa_ptr;
     let input = std::slice::from_raw_parts(input_ptr, pos);
 
-    // Use PikeVM to check if the pattern matches ending at the current position
     let vm = crate::vm::PikeVm::new(nfa.clone());
 
-    // Try all possible start positions before current position
     for lookback_start in 0..=pos {
         let slice = &input[lookback_start..];
-        // Check if pattern matches the entire slice (anchored match)
         if let Some((s, e)) = vm.find(slice) {
             if s == 0 && e == slice.len() {
-                return 0; // Pattern found, negative lookbehind fails
+                return 0;
             }
         }
     }
-    1 // Pattern not found, negative lookbehind succeeds
+    1
+}
+
+/// Helper function callable from JIT code to evaluate a negative lookbehind assertion.
+#[allow(dead_code)]
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+pub unsafe extern "win64" fn check_negative_lookbehind(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_negative_lookbehind_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+pub unsafe extern "sysv64" fn check_negative_lookbehind(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_negative_lookbehind_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn check_negative_lookbehind(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_negative_lookbehind_impl(input_ptr, pos, input_len, nfa_ptr)
 }

@@ -146,11 +146,7 @@ impl LazyDfa {
         };
 
         let pos_ctx = if self.ctx.has_anchors {
-            if self.ctx.has_multiline_anchors && byte == b'\n' {
-                Some(PositionContext::middle())
-            } else {
-                Some(PositionContext::middle())
-            }
+            Some(PositionContext::middle())
         } else {
             None
         };
@@ -208,7 +204,7 @@ impl LazyDfa {
         let next_id = get_or_create_state_with_class(&mut self.ctx, next_closure, curr_class);
 
         let next_idx = state_index(next_id);
-        let is_match = self.ctx.states.get(next_idx).map_or(false, |s| s.is_match);
+        let is_match = self.ctx.states.get(next_idx).is_some_and(|s| s.is_match);
 
         let cache_idx = (state + byte as u32) as usize;
         if cache_idx < self.ctx.transitions.len() {
@@ -332,15 +328,13 @@ impl LazyDfa {
                 result[byte as usize] = Some(next_id);
 
                 let next_idx = state_index(next_id);
-                let is_match = self.ctx.states.get(next_idx).map_or(false, |s| s.is_match);
+                let is_match = self.ctx.states.get(next_idx).is_some_and(|s| s.is_match);
                 let cache_idx = (state + byte as u32) as usize;
                 if cache_idx < self.ctx.transitions.len() {
                     self.ctx.transitions[cache_idx] = tag_state(next_id, is_match);
                 }
-            } else {
-                if cache_idx < self.ctx.transitions.len() {
-                    self.ctx.transitions[cache_idx] = DEAD_STATE;
-                }
+            } else if cache_idx < self.ctx.transitions.len() {
+                self.ctx.transitions[cache_idx] = DEAD_STATE;
             }
         }
     }
@@ -405,7 +399,7 @@ impl LazyDfa {
                     return Some((0, end));
                 }
                 for (i, &byte) in input.iter().enumerate() {
-                    if byte == b'\n' && i + 1 <= input.len() {
+                    if byte == b'\n' && i < input.len() {
                         if let Some(end) = self.find_at(input, i + 1) {
                             return Some((i + 1, end));
                         }
@@ -467,11 +461,7 @@ impl LazyDfa {
             let mut start_set = BTreeSet::new();
             start_set.insert(self.ctx.nfa.start);
 
-            let is_at_boundary = if self.ctx.has_word_boundary {
-                None
-            } else {
-                None
-            };
+            let is_at_boundary: Option<bool> = None;
 
             let start_closure = epsilon_closure_with_context(
                 &self.ctx.nfa,
@@ -755,7 +745,7 @@ impl LazyDfa {
             if let Some(nfa_state) = self.ctx.nfa.get(nfa_id) {
                 if nfa_state.is_match {
                     // Check if this match state has any pending END anchor
-                    let has_end_anchor = nfa_state.instruction.as_ref().map_or(false, |instr| {
+                    let has_end_anchor = nfa_state.instruction.as_ref().is_some_and(|instr| {
                         matches!(instr, NfaInstruction::EndOfLine | NfaInstruction::EndOfText)
                     });
                     if !has_end_anchor {
@@ -778,6 +768,7 @@ impl LazyDfa {
     /// For example, in pattern `(?m)^A|B$`:
     /// - Branch 1 reaches match through ^A (no end anchor)
     /// - Branch 2 reaches match through B$ (EndOfLine)
+    ///
     /// After matching, the DFA state may include states from both branches.
     /// If EndOfLine was filtered out during epsilon closure (because we're not at EOL),
     /// we shouldn't require it - branch 1's path is still valid.
@@ -786,9 +777,10 @@ impl LazyDfa {
         F: Fn(&NfaInstruction) -> bool,
     {
         nfa_states.iter().any(|&nfa_id| {
-            self.ctx.nfa.get(nfa_id).map_or(false, |nfa_state| {
-                nfa_state.instruction.as_ref().map_or(false, &pred)
-            })
+            self.ctx
+                .nfa
+                .get(nfa_id)
+                .is_some_and(|nfa_state| nfa_state.instruction.as_ref().is_some_and(&pred))
         })
     }
 

@@ -11,12 +11,38 @@ use crate::vm::{PikeVm, PikeVmContext};
 use super::super::{
     analyze_liveness, LookaroundCache, NfaLiveness, PatternStep, TaggedNfa, TaggedNfaContext,
 };
+
+#[cfg(target_arch = "x86_64")]
 use super::x86_64::TaggedNfaJitCompiler;
+
+#[cfg(target_arch = "aarch64")]
+use super::aarch64::TaggedNfaJitCompiler;
 
 use dynasmrt::ExecutableBuffer;
 
 /// Sentinel value returned by JIT code to indicate interpreter fallback.
 pub const JIT_USE_INTERPRETER: i64 = -2;
+
+// Platform-specific function pointer types for JIT code
+// x86_64 Windows uses Microsoft x64 ABI
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+type FindFn = unsafe extern "win64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64;
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+type CapturesFn =
+    unsafe extern "win64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64;
+
+// x86_64 Unix uses System V AMD64 ABI
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+type FindFn = unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64;
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+type CapturesFn =
+    unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64;
+
+// ARM64 uses AAPCS64 on all platforms (extern "C")
+#[cfg(target_arch = "aarch64")]
+type FindFn = unsafe extern "C" fn(*const u8, usize, *mut TaggedNfaContext) -> i64;
+#[cfg(target_arch = "aarch64")]
+type CapturesFn = unsafe extern "C" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64;
 
 /// A JIT-compiled Tagged NFA for single-pass capture extraction.
 pub struct TaggedNfaJit {
@@ -24,11 +50,10 @@ pub struct TaggedNfaJit {
     #[allow(dead_code)]
     code: ExecutableBuffer,
     /// Entry point for `find` (returns end position or -1, or -2 for interpreter fallback).
-    find_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64,
+    find_fn: FindFn,
     /// Entry point for `captures` (writes to captures_out buffer, returns match end or -1/-2).
     /// Arguments: input_ptr, input_len, ctx, captures_out
-    captures_fn:
-        unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64,
+    captures_fn: CapturesFn,
     /// Liveness analysis for sparse copying.
     liveness: NfaLiveness,
     /// The NFA (kept for reference, PikeVm is used for fallback).
@@ -44,11 +69,11 @@ pub struct TaggedNfaJit {
     stride: usize,
     /// Stored CodepointClasses for JIT code to reference.
     /// These must outlive the JIT code since their pointers are embedded in the generated assembly.
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::vec_box)]
     codepoint_classes: Vec<Box<CodepointClass>>,
     /// Stored lookaround NFAs for JIT code to reference via helper functions.
     /// Index corresponds to the index stored in PatternStep::*Lookahead/*Lookbehind.
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::vec_box)]
     lookaround_nfas: Vec<Box<Nfa>>,
     /// Whether find_fn needs context (false for simple patterns).
     /// When false, we skip the expensive context setup in find().
@@ -70,16 +95,11 @@ pub struct TaggedNfaJit {
 
 impl TaggedNfaJit {
     /// Creates a new TaggedNfaJit from compiled components.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::vec_box)]
     pub(super) fn new(
         code: ExecutableBuffer,
-        find_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64,
-        captures_fn: unsafe extern "sysv64" fn(
-            *const u8,
-            usize,
-            *mut TaggedNfaContext,
-            *mut i64,
-        ) -> i64,
+        find_fn: FindFn,
+        captures_fn: CapturesFn,
         liveness: NfaLiveness,
         nfa: Nfa,
         capture_count: u32,
@@ -142,6 +162,7 @@ impl TaggedNfaJit {
                 let ns = t0.elapsed().as_nanos() as u64;
                 TOTAL_NS.fetch_add(ns, std::sync::atomic::Ordering::Relaxed);
                 let count = CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                #[allow(clippy::manual_is_multiple_of)]
                 if count % 10000 == 0 {
                     let total = TOTAL_NS.load(std::sync::atomic::Ordering::Relaxed);
                     eprintln!(

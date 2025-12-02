@@ -86,12 +86,8 @@ impl NfaBuilder {
         let start = self.add_state();
         let mut current = start;
 
-        for (i, &byte) in bytes.iter().enumerate() {
-            let next = if i == bytes.len() - 1 {
-                self.add_state()
-            } else {
-                self.add_state()
-            };
+        for &byte in bytes.iter() {
+            let next = self.add_state();
 
             if let Some(state) = self.nfa.get_mut(current) {
                 state.add_transition(ByteRange::single(byte), next);
@@ -141,11 +137,9 @@ impl NfaBuilder {
                     state.add_transition(range, end);
                 }
             }
-        } else {
-            if let Some(state) = self.nfa.get_mut(start) {
-                for &(lo, hi) in &class.ranges {
-                    state.add_transition(ByteRange::new(lo, hi), end);
-                }
+        } else if let Some(state) = self.nfa.get_mut(start) {
+            for &(lo, hi) in &class.ranges {
+                state.add_transition(ByteRange::new(lo, hi), end);
             }
         }
 

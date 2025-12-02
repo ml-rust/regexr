@@ -211,13 +211,11 @@ impl Teddy {
 
                     // Verify each matching pattern
                     for (pat_idx, pattern) in self.patterns.iter().enumerate() {
-                        if (pattern_mask & (1 << pat_idx)) != 0 {
-                            // First byte matches, verify the rest
-                            if pos + pattern.len() <= len {
-                                if haystack[pos..pos + pattern.len()] == *pattern {
-                                    return Some((pat_idx, pos));
-                                }
-                            }
+                        if (pattern_mask & (1 << pat_idx)) != 0
+                            && pos + pattern.len() <= len
+                            && haystack[pos..pos + pattern.len()] == *pattern
+                        {
+                            return Some((pat_idx, pos));
                         }
                     }
                 }
@@ -251,16 +249,18 @@ impl Teddy {
     /// Scalar search starting from a base offset.
     fn find_scalar_from(&self, haystack: &[u8], base_offset: usize) -> Option<(usize, usize)> {
         for (i, window) in haystack.windows(1).enumerate() {
-            let first_byte = window[0];
             let pos = base_offset + i;
 
-            // Quick nibble check
+            // Quick nibble check (x86_64 only - uses precomputed nibble tables)
             #[cfg(target_arch = "x86_64")]
-            let pattern_mask = self.lo_nibble_table[(first_byte & 0x0F) as usize]
-                & self.hi_nibble_table[(first_byte >> 4) as usize];
+            let pattern_mask = {
+                let first_byte = window[0];
+                self.lo_nibble_table[(first_byte & 0x0F) as usize]
+                    & self.hi_nibble_table[(first_byte >> 4) as usize]
+            };
 
             #[cfg(not(target_arch = "x86_64"))]
-            let pattern_mask = 0xFFu8; // Check all patterns
+            let pattern_mask = 0xFFu8; // Check all patterns on non-x86
 
             if pattern_mask != 0 {
                 for (pat_idx, pattern) in self.patterns.iter().enumerate() {
@@ -269,10 +269,10 @@ impl Teddy {
                         continue;
                     }
 
-                    if i + pattern.len() <= haystack.len() {
-                        if &haystack[i..i + pattern.len()] == pattern.as_slice() {
-                            return Some((pat_idx, pos));
-                        }
+                    if i + pattern.len() <= haystack.len()
+                        && &haystack[i..i + pattern.len()] == pattern.as_slice()
+                    {
+                        return Some((pat_idx, pos));
                     }
                 }
             }
@@ -311,7 +311,7 @@ impl<'a, 'h> Iterator for TeddyIter<'a, 'h> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_arch = "x86_64"))]
 mod tests {
     use super::*;
 

@@ -1,6 +1,6 @@
 [package]
 name = "regexr"
-version = "0.1.0"
+version = "0.1.0-beta.3"
 edition = "2021"
 authors = ["Farhan Syah"]
 description = "A high-performance regex engine built from scratch with JIT compilation and SIMD acceleration"

@@ -50,7 +50,7 @@ impl TrieNode {
     fn insert(&mut self, bytes: &[u8], capture_index: Option<u32>, capture_name: Option<String>) {
         let mut node = self;
         for &byte in bytes {
-            node = node.children.entry(byte).or_insert_with(TrieNode::new);
+            node = node.children.entry(byte).or_default();
         }
         node.is_terminal = true;
         node.capture_index = capture_index;
@@ -61,11 +61,7 @@ impl TrieNode {
     fn to_hir(&self) -> HirExpr {
         // If this is a terminal with no children, return empty
         if self.children.is_empty() {
-            return if self.is_terminal {
-                HirExpr::Empty
-            } else {
-                HirExpr::Empty
-            };
+            return HirExpr::Empty;
         }
 
         // Collect all children

@@ -19,14 +19,14 @@ mod engine;
 pub mod interpreter;
 pub(crate) mod shared;
 
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub mod jit;
 
 // Re-exports
 pub use engine::BacktrackingEngine;
 pub use interpreter::BacktrackingVm;
 
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub use jit::{compile_backtracking, BacktrackingJit};
 
 #[cfg(test)]
@@ -74,7 +74,7 @@ mod tests {
         assert_eq!(caps[3], Some((2, 3)));
     }
 
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     mod jit_tests {
         use super::*;
         use crate::vm::backtracking::jit::compile_backtracking;

@@ -256,7 +256,7 @@ impl EagerDfa {
                     return Some((0, end));
                 }
                 for (i, &byte) in input.iter().enumerate() {
-                    if byte == b'\n' && i + 1 <= input.len() {
+                    if byte == b'\n' && i < input.len() {
                         if let Some(end) = self.find_at(input, i + 1) {
                             return Some((i + 1, end));
                         }

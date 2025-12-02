@@ -5,7 +5,12 @@
 use dynasmrt::ExecutableBuffer;
 
 use super::super::ShiftOr;
+
+#[cfg(target_arch = "x86_64")]
 use super::x86_64::ShiftOrJitCompiler;
+
+#[cfg(target_arch = "aarch64")]
+use super::aarch64::ShiftOrJitCompiler;
 
 /// JIT-compiled Shift-Or matcher with Glushkov follow sets.
 pub struct JitShiftOr {
@@ -173,6 +178,19 @@ impl JitShiftOr {
     fn call_find(&self, input: &[u8]) -> i64 {
         // OPTIMIZED: Only 4 parameters (masks/follow are embedded in JIT code)
         // Function signature: fn(input, len, accept, first) -> i64
+
+        // x86_64 Windows uses Microsoft x64 ABI
+        #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+        let func: extern "win64" fn(*const u8, usize, u64, u64) -> i64 =
+            unsafe { std::mem::transmute(self.code.ptr(self.find_offset)) };
+
+        // x86_64 Unix uses System V AMD64 ABI
+        #[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
+        let func: extern "sysv64" fn(*const u8, usize, u64, u64) -> i64 =
+            unsafe { std::mem::transmute(self.code.ptr(self.find_offset)) };
+
+        // ARM64 uses AAPCS64 on all platforms (extern "C")
+        #[cfg(target_arch = "aarch64")]
         let func: extern "C" fn(*const u8, usize, u64, u64) -> i64 =
             unsafe { std::mem::transmute(self.code.ptr(self.find_offset)) };
 

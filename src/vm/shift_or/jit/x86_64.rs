@@ -62,11 +62,9 @@ impl ShiftOrJitCompiler {
         // Masks and follow pointers are EMBEDDED in the JIT code (movabs instructions)
         // This saves 2 parameter slots and 2 register moves in prologue.
         //
-        // Register allocation (System V AMD64 ABI):
-        //   rdi = input pointer
-        //   rsi = input length
-        //   rdx = accept mask
-        //   rcx = first mask
+        // Register allocation:
+        //   Unix (System V AMD64): rdi=input, rsi=len, rdx=accept, rcx=first
+        //   Windows (Microsoft x64): rcx=input, rdx=len, r8=accept, r9=first
         //
         // Working registers:
         //   r10 = current start position being tried
@@ -83,6 +81,30 @@ impl ShiftOrJitCompiler {
         let offset = ops.offset();
         let _ = shift_or.position_count;
 
+        // Platform-specific prologue
+        #[cfg(target_os = "windows")]
+        dynasm!(ops
+            ; .arch x64
+            // Prologue - save callee-saved registers (including RDI/RSI on Windows)
+            ; push rdi
+            ; push rsi
+            ; push rbx
+            ; push r12
+            ; push r13
+            ; push r14
+            ; push r15
+            ; sub rsp, 24           // Allocate stack space for saved values
+
+            // Windows x64: rcx=input, rdx=len, r8=accept, r9=first
+            ; mov r14, rcx           // r14 = input
+            ; mov r15, rdx           // r15 = len
+            ; mov rbx, QWORD masks_ptr as i64  // rbx = masks (EMBEDDED!)
+            ; mov r12, QWORD follow_ptr as i64 // r12 = follow (EMBEDDED!)
+            ; mov r13, r8            // r13 = accept
+            ; mov [rsp], r9          // [rsp] = first
+        );
+
+        #[cfg(not(target_os = "windows"))]
         dynasm!(ops
             ; .arch x64
             // Prologue - save callee-saved registers
@@ -93,14 +115,16 @@ impl ShiftOrJitCompiler {
             ; push r15
             ; sub rsp, 24           // Allocate stack space for saved values
 
-            // Save arguments and load embedded pointers
+            // Unix: rdi=input, rsi=len, rdx=accept, rcx=first
             ; mov r14, rdi           // r14 = input
             ; mov r15, rsi           // r15 = len
             ; mov rbx, QWORD masks_ptr as i64  // rbx = masks (EMBEDDED!)
             ; mov r12, QWORD follow_ptr as i64 // r12 = follow (EMBEDDED!)
             ; mov r13, rdx           // r13 = accept (was r8, now rdx)
             ; mov [rsp], rcx         // [rsp] = first (was r9, now rcx)
+        );
 
+        dynasm!(ops
             // Initialize - match state on stack (less frequently accessed)
             ; xor r10d, r10d         // r10 = start position = 0
             ; mov QWORD [rsp+16], -1 // last_match_end = -1
@@ -227,6 +251,18 @@ impl ShiftOrJitCompiler {
             ; pop r13
             ; pop r12
             ; pop rbx
+        );
+
+        // Platform-specific epilogue
+        #[cfg(target_os = "windows")]
+        dynasm!(ops
+            ; pop rsi
+            ; pop rdi
+            ; ret
+        );
+
+        #[cfg(not(target_os = "windows"))]
+        dynasm!(ops
             ; ret
         );
 

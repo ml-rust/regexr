@@ -2,6 +2,12 @@
 //!
 //! This module emits native x86-64 assembly code for DFA state machines.
 //! All code is W^X compliant and optimized for performance.
+//!
+//! # Platform Support
+//!
+//! Supports both calling conventions:
+//! - **System V AMD64 ABI** (Linux, macOS, BSD): Args in RDI, RSI
+//! - **Microsoft x64 ABI** (Windows): Args in RCX, RDX
 
 use crate::dfa::DfaStateId;
 use crate::error::{Error, ErrorKind, Result};
@@ -13,7 +19,16 @@ use dynasmrt::{
 
 /// Compiles a materialized DFA to x86-64 machine code.
 ///
-/// # Calling Convention (System V AMD64 ABI)
+/// # Calling Convention
+///
+/// The function accepts two arguments:
+/// - Arg 1: input pointer (const uint8_t*)
+/// - Arg 2: length (size_t)
+///
+/// On Unix (System V AMD64): args in RDI, RSI
+/// On Windows (Microsoft x64): args in RCX, RDX
+///
+/// # Internal Register Usage
 /// - `rdi` = current position in input (mutable, incremented during execution)
 /// - `rsi` = input base pointer (immutable)
 /// - `rdx` = input end pointer (base + len, immutable)
@@ -146,7 +161,7 @@ pub fn compile_states(
 
 /// Emits the function prologue.
 ///
-/// This sets up the calling convention:
+/// This sets up the internal register convention:
 /// - rdi = current position (starts at 0)
 /// - rsi = input base pointer (from first argument)
 /// - rdx = input end pointer (base + len)
@@ -154,6 +169,11 @@ pub fn compile_states(
 /// - r11 = search start position (for unanchored search, tracks where current attempt began)
 /// - r13 = prev_char_class (0 = NonWord, 1 = Word) for word boundary patterns
 /// - Jump to the specified start state
+///
+/// # Platform Differences
+///
+/// - **Unix (System V AMD64)**: Args in RDI, RSI. R13 is callee-saved.
+/// - **Windows (Microsoft x64)**: Args in RCX, RDX. RDI, RSI, R13 are all callee-saved.
 ///
 /// The restart_label is for unanchored patterns - when we fail to match,
 /// we increment r11 and restart from the start state.
@@ -180,37 +200,54 @@ fn emit_prologue(
             )
         })?;
 
-    // For word boundary patterns, save r13 (callee-saved register in System V ABI)
-    // Each entry point (primary and secondary) must save r13 since both can be called independently
-    if has_word_boundary {
+    // Platform-specific prologue: save callee-saved registers and move args
+    #[cfg(target_os = "windows")]
+    {
+        // Windows x64: RDI, RSI are callee-saved. Args come in RCX, RDX.
         dynasm!(asm
-            ; push r13  // Save callee-saved register
+            ; push rdi
+            ; push rsi
+        );
+        if has_word_boundary {
+            dynasm!(asm
+                ; push r13
+            );
+        }
+        // Move arguments: RCX -> R8 (temp for input ptr), RDX = len
+        dynasm!(asm
+            ; mov r8, rcx   // Save input ptr to r8
+            ; lea rdx, [rcx + rdx]  // end = input + len (rdx was len)
+            ; mov rsi, r8   // base = input ptr
+            ; xor rdi, rdi  // pos = 0
+            ; mov r10, -1i32 as _   // last match = -1
+            ; xor r11, r11  // search start = 0
         );
     }
 
-    dynasm!(asm
-        // Function entry point
-        // Arguments: rdi = input ptr, rsi = len
-        // We need to set up: rdi = pos, rsi = base, rdx = end, r10 = -1, r11 = 0
-
-        // Save original input pointer to r8 temporarily
-        ; mov r8, rdi
-
-        // Calculate end pointer: rdx = rdi + rsi
-        ; lea rdx, [rdi + rsi]
-
-        // Set up base pointer: rsi = original rdi (now in r8)
-        ; mov rsi, r8
-
-        // Initialize position to 0: rdi = 0
-        ; xor rdi, rdi
-
-        // Initialize last match position to -1: r10 = -1
-        ; mov r10, -1
-
-        // Initialize search start position to 0: r11 = 0
-        ; xor r11, r11
-    );
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Unix (System V AMD64): Args in RDI, RSI. Only R13 is callee-saved.
+        if has_word_boundary {
+            dynasm!(asm
+                ; push r13
+            );
+        }
+        dynasm!(asm
+            // Arguments: rdi = input ptr, rsi = len
+            // Save original input pointer to r8 temporarily
+            ; mov r8, rdi
+            // Calculate end pointer: rdx = rdi + rsi
+            ; lea rdx, [rdi + rsi]
+            // Set up base pointer: rsi = original rdi (now in r8)
+            ; mov rsi, r8
+            // Initialize position to 0: rdi = 0
+            ; xor rdi, rdi
+            // Initialize last match position to -1: r10 = -1
+            ; mov r10, -1i32 as _
+            // Initialize search start position to 0: r11 = 0
+            ; xor r11, r11
+        );
+    }
 
     // For word boundary patterns, initialize r13 = prev_char_class
     // r13 = 0 means NonWord (start of input or after non-word char)
@@ -299,6 +336,7 @@ fn emit_dispatch(
 ///
 /// The ranges are the byte ranges that self-loop, and other_targets are
 /// non-self-loop transitions that need to be checked after the fast-forward.
+#[allow(clippy::type_complexity)]
 fn analyze_self_loop(
     state: &MaterializedState,
 ) -> Option<(Vec<(u8, u8)>, Vec<(u8, u8, DfaStateId)>)> {
@@ -941,7 +979,11 @@ fn emit_dead_state(
 /// Otherwise, returns -1 to indicate no match.
 ///
 /// The start position is tracked in r11 (updated on each restart for unanchored search).
-/// For word boundary patterns, we need to restore r13 before returning.
+///
+/// # Platform Differences
+///
+/// - **Unix**: Only R13 needs restoring (for word boundary patterns)
+/// - **Windows**: RDI, RSI, and R13 (if word boundary) need restoring
 fn emit_no_match(
     asm: &mut Assembler,
     no_match_label: DynamicLabel,
@@ -959,25 +1001,47 @@ fn emit_no_match(
         ; or rax, r10
     );
 
-    // Restore r13 before returning (only for word boundary patterns)
-    if has_word_boundary {
+    // Restore callee-saved registers before returning
+    #[cfg(target_os = "windows")]
+    {
+        if has_word_boundary {
+            dynasm!(asm ; pop r13);
+        }
         dynasm!(asm
-            ; pop r13
+            ; pop rsi
+            ; pop rdi
         );
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if has_word_boundary {
+            dynasm!(asm ; pop r13);
+        }
     }
 
     dynasm!(asm
         ; ret
         ; truly_no_match:
         // No match at all
-        ; mov rax, -1
+        ; mov rax, -1i32 as _
     );
 
-    // Restore r13 before returning (only for word boundary patterns)
-    if has_word_boundary {
+    // Restore callee-saved registers before returning
+    #[cfg(target_os = "windows")]
+    {
+        if has_word_boundary {
+            dynasm!(asm ; pop r13);
+        }
         dynasm!(asm
-            ; pop r13
+            ; pop rsi
+            ; pop rdi
         );
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if has_word_boundary {
+            dynasm!(asm ; pop r13);
+        }
     }
 
     dynasm!(asm
@@ -1010,9 +1074,9 @@ mod tests {
     #[test]
     fn test_contiguous_range() {
         assert!(is_contiguous_range(&[1, 2, 3, 4]));
-        assert!(is_contiguous_range(&[b'a', b'b', b'c']));
+        assert!(is_contiguous_range(b"abc"));
         assert!(!is_contiguous_range(&[1, 2, 4, 5]));
-        assert!(!is_contiguous_range(&[b'a', b'c']));
+        assert!(!is_contiguous_range(b"ac"));
         assert!(is_contiguous_range(&[42]));
         assert!(is_contiguous_range(&[]));
     }
@@ -1020,6 +1084,6 @@ mod tests {
     #[test]
     fn test_unsorted_contiguous() {
         assert!(is_contiguous_range(&[3, 1, 2, 4]));
-        assert!(is_contiguous_range(&[b'c', b'a', b'b']));
+        assert!(is_contiguous_range(b"cab"));
     }
 }

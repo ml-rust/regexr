@@ -90,7 +90,7 @@ fn test_split_on_whitespace() {
         .filter(|s| !s.is_empty())
         .collect();
 
-    assert!(parts.len() >= 1);
+    assert!(!parts.is_empty());
 }
 
 #[test]
@@ -180,7 +180,7 @@ fn test_word_after_whitespace() {
         .collect();
     assert!(matches.contains(&"world"));
     assert!(matches.contains(&"test"));
-    assert!(!matches.iter().any(|&m| m == "hello")); // First word has no preceding space
+    assert!(!matches.contains(&"hello")); // First word has no preceding space
 }
 
 #[test]
@@ -518,7 +518,7 @@ fn test_mixed_script_word_segmentation() {
     let segments: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
 
     // Should segment based on script boundaries
-    assert!(segments.len() >= 1);
+    assert!(!segments.is_empty());
 }
 
 // =============================================================================

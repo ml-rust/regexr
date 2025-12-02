@@ -23,7 +23,7 @@ mod engine;
 pub mod interpreter;
 mod shared;
 
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub mod jit;
 
 // Re-exports
@@ -31,7 +31,7 @@ pub use engine::ShiftOrEngine;
 pub use interpreter::ShiftOrInterpreter;
 pub use shared::{is_shift_or_compatible, is_shift_or_wide_compatible, ShiftOr, ShiftOrWide};
 
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub use jit::JitShiftOr;
 
 #[cfg(test)]
@@ -208,7 +208,7 @@ mod tests {
         assert!(make_shift_or(r"a{1,3}?b").is_none());
     }
 
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     mod jit_tests {
         use super::*;
 
@@ -357,7 +357,7 @@ mod tests {
             let so = make_wide(&pattern).unwrap();
 
             // Match at the start
-            let input = format!("{}", "a".repeat(100));
+            let input = "a".repeat(100);
             assert_eq!(so.find(input.as_bytes()), Some((0, 100)));
 
             // Match after prefix

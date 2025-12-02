@@ -143,8 +143,8 @@ impl Capabilities {
 
     #[cfg(feature = "jit")]
     fn detect_jit() -> bool {
-        // JIT is available on x86-64 Linux/macOS/Windows
-        cfg!(target_arch = "x86_64")
+        // JIT is available on x86-64 and aarch64 (Linux/macOS/Windows)
+        cfg!(any(target_arch = "x86_64", target_arch = "aarch64"))
     }
 }
 

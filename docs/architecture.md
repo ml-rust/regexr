@@ -79,7 +79,7 @@ Pattern String → AST → HIR → NFA → Engine-Specific Representation
 
 ### JIT Engines (Native Code Generation)
 
-Available on x86-64 with the `jit` feature.
+Available on x86-64 (Linux, macOS, Windows) and ARM64 (Linux, macOS) with the `jit` feature.
 
 #### DFA JIT (`src/jit/`)
 - Compiles DFA to native machine code
@@ -245,7 +245,7 @@ full = ["jit", "simd"]
 ```
 
 - **default**: SIMD acceleration only
-- **jit**: Adds JIT compilation (x86-64 only)
+- **jit**: Adds JIT compilation (x86-64 and ARM64)
 - **full**: Both JIT and SIMD
 
 ### Conditional Compilation
@@ -253,11 +253,11 @@ full = ["jit", "simd"]
 JIT engines use conditional compilation:
 
 ```rust
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub mod jit;
 ```
 
-This ensures JIT code is only compiled on supported platforms.
+This ensures JIT code is only compiled on supported platforms (x86-64 and ARM64).
 
 ## Performance Considerations
 

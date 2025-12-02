@@ -21,7 +21,7 @@ pub const MAX_POSITIONS_WIDE: usize = 256;
 /// Operations are implemented to work efficiently with the Shift-Or algorithm.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BitSet256 {
-    /// 4 x u64 for 256 bits. parts[0] holds bits 0-63, parts[1] holds bits 64-127, etc.
+    /// 4 x u64 for 256 bits. `parts[0]` holds bits 0-63, `parts[1]` holds bits 64-127, etc.
     pub parts: [u64; 4],
 }
 
