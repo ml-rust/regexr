@@ -50,23 +50,23 @@ impl TaggedNfa {
                     }
                     pos += 1;
                 }
-                PatternStep::Ranges(ranges) => {
+                PatternStep::ByteClass(byte_class) => {
                     if pos >= input.len() {
                         return None;
                     }
                     let byte = input[pos];
-                    if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                    if !byte_class.contains(byte) {
                         return None;
                     }
                     pos += 1;
                 }
-                PatternStep::GreedyPlus(ranges) => {
+                PatternStep::GreedyPlus(byte_class) => {
                     // Must match at least one
                     if pos >= input.len() {
                         return None;
                     }
                     let byte = input[pos];
-                    if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                    if !byte_class.contains(byte) {
                         return None;
                     }
                     let min_pos = pos + 1;
@@ -74,7 +74,7 @@ impl TaggedNfa {
                     // Match as many as possible
                     while pos < input.len() {
                         let byte = input[pos];
-                        if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                        if !byte_class.contains(byte) {
                             break;
                         }
                         pos += 1;
@@ -93,12 +93,12 @@ impl TaggedNfa {
                         }
                     }
                 }
-                PatternStep::GreedyStar(ranges) => {
+                PatternStep::GreedyStar(byte_class) => {
                     let min_pos = pos; // Can backtrack to zero matches
                     // Match as many as possible (zero or more)
                     while pos < input.len() {
                         let byte = input[pos];
-                        if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                        if !byte_class.contains(byte) {
                             break;
                         }
                         pos += 1;
@@ -117,13 +117,13 @@ impl TaggedNfa {
                         }
                     }
                 }
-                PatternStep::GreedyPlusLookahead(ranges, lookahead_steps, is_positive) => {
+                PatternStep::GreedyPlusLookahead(byte_class, lookahead_steps, is_positive) => {
                     // Must match at least one
                     if pos >= input.len() {
                         return None;
                     }
                     let byte = input[pos];
-                    if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                    if !byte_class.contains(byte) {
                         return None;
                     }
                     let min_pos = pos + 1;
@@ -131,7 +131,7 @@ impl TaggedNfa {
                     // Greedily consume all matching
                     while pos < input.len() {
                         let byte = input[pos];
-                        if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                        if !byte_class.contains(byte) {
                             break;
                         }
                         pos += 1;
@@ -148,12 +148,12 @@ impl TaggedNfa {
                         pos -= 1;
                     }
                 }
-                PatternStep::GreedyStarLookahead(ranges, lookahead_steps, is_positive) => {
+                PatternStep::GreedyStarLookahead(byte_class, lookahead_steps, is_positive) => {
                     let min_pos = pos;
                     // Greedily consume all matching
                     while pos < input.len() {
                         let byte = input[pos];
-                        if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                        if !byte_class.contains(byte) {
                             break;
                         }
                         pos += 1;
@@ -296,13 +296,13 @@ impl TaggedNfa {
         // Optimize common case: `.*X` where X is a character class or byte
         // For `(?=.*\d)`, we need to check if a digit exists within the range that `.*` can match
         if steps.len() == 2 {
-            if let PatternStep::GreedyStar(star_ranges) = &steps[0] {
-                // Find the extent of `.*` - it matches characters in star_ranges
-                // For standard `.*`, star_ranges excludes newline (0x0a)
+            if let PatternStep::GreedyStar(star_class) = &steps[0] {
+                // Find the extent of `.*` - it matches characters in star_class
+                // For standard `.*`, star_class excludes newline (0x0a)
                 let mut star_end = pos;
                 while star_end < input.len() {
                     let byte = input[star_end];
-                    if !star_ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                    if !star_class.contains(byte) {
                         break;
                     }
                     star_end += 1;
@@ -310,13 +310,13 @@ impl TaggedNfa {
 
                 // Now check if the final step matches anywhere from pos to star_end
                 match &steps[1] {
-                    PatternStep::Ranges(final_ranges) => {
+                    PatternStep::ByteClass(final_class) => {
                         for p in pos..=star_end {
                             if p >= input.len() {
                                 break;
                             }
                             let byte = input[p];
-                            if final_ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                            if final_class.contains(byte) {
                                 return true;
                             }
                         }
@@ -358,30 +358,30 @@ impl TaggedNfa {
                 }
                 Self::check_lookahead_recursive(rest, input, pos + 1)
             }
-            PatternStep::Ranges(ranges) => {
+            PatternStep::ByteClass(byte_class) => {
                 if pos >= input.len() {
                     return false;
                 }
                 let byte = input[pos];
-                if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                if !byte_class.contains(byte) {
                     return false;
                 }
                 Self::check_lookahead_recursive(rest, input, pos + 1)
             }
-            PatternStep::GreedyPlus(ranges) => {
+            PatternStep::GreedyPlus(byte_class) => {
                 // Must match at least one
                 if pos >= input.len() {
                     return false;
                 }
                 let byte = input[pos];
-                if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                if !byte_class.contains(byte) {
                     return false;
                 }
                 // Greedily match as many as possible, then backtrack
                 let mut end = pos + 1;
                 while end < input.len() {
                     let byte = input[end];
-                    if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                    if !byte_class.contains(byte) {
                         break;
                     }
                     end += 1;
@@ -394,12 +394,12 @@ impl TaggedNfa {
                 }
                 false
             }
-            PatternStep::GreedyStar(ranges) => {
+            PatternStep::GreedyStar(byte_class) => {
                 // Match as many as possible (zero or more), then backtrack
                 let mut end = pos;
                 while end < input.len() {
                     let byte = input[end];
-                    if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                    if !byte_class.contains(byte) {
                         break;
                     }
                     end += 1;
@@ -495,12 +495,12 @@ impl TaggedNfa {
                     }
                     p += 1;
                 }
-                PatternStep::Ranges(ranges) => {
+                PatternStep::ByteClass(byte_class) => {
                     if p >= pos {
                         return false;
                     }
                     let byte = input[p];
-                    if !ranges.iter().any(|r| byte >= r.start && byte <= r.end) {
+                    if !byte_class.contains(byte) {
                         return false;
                     }
                     p += 1;

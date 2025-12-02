@@ -3,7 +3,7 @@
 //! These structures are used by both the interpreter and JIT implementations.
 
 use crate::hir::CodepointClass;
-use crate::nfa::{ByteRange, StateId};
+use crate::nfa::{ByteClass, StateId};
 
 /// Maximum threads per position (prevents unbounded memory growth).
 pub const MAX_THREADS: usize = 256;
@@ -308,29 +308,29 @@ impl TaggedNfaContext {
 pub enum PatternStep {
     /// Match a single byte.
     Byte(u8),
-    /// Match any byte in these ranges (character class).
-    Ranges(Vec<ByteRange>),
-    /// Greedy one-or-more repetition of byte ranges.
-    /// The inner Vec represents the character class to repeat.
-    GreedyPlus(Vec<ByteRange>),
-    /// Greedy zero-or-more repetition of byte ranges.
+    /// Match any byte in this class (character class with precomputed bitmap).
+    ByteClass(ByteClass),
+    /// Greedy one-or-more repetition of byte class.
+    /// The ByteClass has precomputed bitmap for O(1) matching.
+    GreedyPlus(ByteClass),
+    /// Greedy zero-or-more repetition of byte class.
     #[allow(dead_code)]
-    GreedyStar(Vec<ByteRange>),
+    GreedyStar(ByteClass),
     /// Greedy one-or-more with lookahead: matches as many as possible, then backtracks
-    /// until the lookahead succeeds. (ranges, lookahead_steps, is_positive)
-    GreedyPlusLookahead(Vec<ByteRange>, Vec<PatternStep>, bool),
+    /// until the lookahead succeeds. (byte_class, lookahead_steps, is_positive)
+    GreedyPlusLookahead(ByteClass, Vec<PatternStep>, bool),
     /// Greedy zero-or-more with lookahead: matches as many as possible, then backtracks
-    /// until the lookahead succeeds. (ranges, lookahead_steps, is_positive)
+    /// until the lookahead succeeds. (byte_class, lookahead_steps, is_positive)
     #[allow(dead_code)]
-    GreedyStarLookahead(Vec<ByteRange>, Vec<PatternStep>, bool),
-    /// Non-greedy one-or-more repetition of byte ranges.
-    /// Contains the ranges to repeat and the following step(s) that terminate the loop.
+    GreedyStarLookahead(ByteClass, Vec<PatternStep>, bool),
+    /// Non-greedy one-or-more repetition of byte class.
+    /// Contains the byte class to repeat and the following step(s) that terminate the loop.
     /// The JIT generates code that tries to exit as soon as possible.
-    NonGreedyPlus(Vec<ByteRange>, Box<PatternStep>),
-    /// Non-greedy zero-or-more repetition of byte ranges.
-    /// Contains the ranges to repeat and the following step(s) that terminate the loop.
+    NonGreedyPlus(ByteClass, Box<PatternStep>),
+    /// Non-greedy zero-or-more repetition of byte class.
+    /// Contains the byte class to repeat and the following step(s) that terminate the loop.
     /// The JIT generates code that tries to exit immediately (zero matches).
-    NonGreedyStar(Vec<ByteRange>, Box<PatternStep>),
+    NonGreedyStar(ByteClass, Box<PatternStep>),
     /// Alternation: try each alternative in order.
     /// Each alternative is a sequence of pattern steps.
     Alt(Vec<Vec<PatternStep>>),

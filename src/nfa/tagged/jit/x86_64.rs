@@ -5,7 +5,7 @@
 
 use crate::error::{Error, ErrorKind, Result};
 use crate::hir::CodepointClass;
-use crate::nfa::{ByteRange, Nfa, NfaInstruction, StateId};
+use crate::nfa::{ByteClass, ByteRange, Nfa, NfaInstruction, StateId};
 
 use super::super::{NfaLiveness, TaggedNfaContext, PatternStep};
 use super::jit::TaggedNfaJit;
@@ -236,7 +236,7 @@ impl TaggedNfaJitCompiler {
     fn step_consumes_input(step: &PatternStep) -> bool {
         match step {
             PatternStep::Byte(_) |
-            PatternStep::Ranges(_) |
+            PatternStep::ByteClass(_) |
             PatternStep::GreedyPlus(_) |
             PatternStep::GreedyStar(_) |
             PatternStep::GreedyCodepointPlus(_) |
@@ -369,26 +369,26 @@ impl TaggedNfaJitCompiler {
                         ; inc r14                   // Advance position
                     );
                 }
-                PatternStep::Ranges(ranges) => {
+                PatternStep::ByteClass(byte_class) => {
                     // Check bounds
                     dynasm!(self.asm
                         ; cmp r14, r12
                         ; jge =>byte_mismatch
                         ; movzx eax, BYTE [rbx + r14]
                     );
-                    self.emit_range_check(ranges, byte_mismatch)?;
+                    self.emit_range_check(&byte_class.ranges, byte_mismatch)?;
                     dynasm!(self.asm
                         ; inc r14                   // Advance position
                     );
                 }
-                PatternStep::GreedyPlus(ranges) => {
+                PatternStep::GreedyPlus(byte_class) => {
                     // Check if there are remaining steps that consume input
                     let remaining = &steps[step_idx + 1..];
                     let needs_backtrack = remaining.iter().any(|s| Self::step_consumes_input(s));
 
                     if needs_backtrack {
                         // Backtracking version: greedily match, then try remaining, backtrack on failure
-                        self.emit_greedy_plus_with_backtracking(ranges, remaining, byte_mismatch)?;
+                        self.emit_greedy_plus_with_backtracking(&byte_class.ranges, remaining, byte_mismatch)?;
                         // Remaining steps already handled in backtracking code
                         break;
                     } else {
@@ -402,7 +402,7 @@ impl TaggedNfaJitCompiler {
                             ; jge =>byte_mismatch       // Must have at least one byte
                             ; movzx eax, BYTE [rbx + r14]
                         );
-                        self.emit_range_check(ranges, byte_mismatch)?;
+                        self.emit_range_check(&byte_class.ranges, byte_mismatch)?;
                         dynasm!(self.asm
                             ; inc r14                   // Consumed first byte
 
@@ -412,7 +412,7 @@ impl TaggedNfaJitCompiler {
                             ; jge =>loop_done           // End of input - done looping
                             ; movzx eax, BYTE [rbx + r14]
                         );
-                        self.emit_range_check(ranges, loop_done)?;
+                        self.emit_range_check(&byte_class.ranges, loop_done)?;
                         dynasm!(self.asm
                             ; inc r14                   // Consumed another byte
                             ; jmp =>loop_start
@@ -420,14 +420,14 @@ impl TaggedNfaJitCompiler {
                         );
                     }
                 }
-                PatternStep::GreedyStar(ranges) => {
+                PatternStep::GreedyStar(byte_class) => {
                     // Check if there are remaining steps that consume input
                     let remaining = &steps[step_idx + 1..];
                     let needs_backtrack = remaining.iter().any(|s| Self::step_consumes_input(s));
 
                     if needs_backtrack {
                         // Backtracking version
-                        self.emit_greedy_star_with_backtracking(ranges, remaining, byte_mismatch)?;
+                        self.emit_greedy_star_with_backtracking(&byte_class.ranges, remaining, byte_mismatch)?;
                         break;
                     } else {
                         // Simple version: no backtracking needed
@@ -440,7 +440,7 @@ impl TaggedNfaJitCompiler {
                             ; jge =>loop_done           // End of input - done looping
                             ; movzx eax, BYTE [rbx + r14]
                         );
-                        self.emit_range_check(ranges, loop_done)?;
+                        self.emit_range_check(&byte_class.ranges, loop_done)?;
                         dynasm!(self.asm
                             ; inc r14                   // Consumed a byte
                             ; jmp =>loop_start
@@ -448,7 +448,7 @@ impl TaggedNfaJitCompiler {
                         );
                     }
                 }
-                PatternStep::NonGreedyPlus(ranges, suffix) => {
+                PatternStep::NonGreedyPlus(byte_class, suffix) => {
                     // Non-greedy one-or-more: match minimum (1), then try suffix
                     // If suffix fails, consume one more and retry
                     let try_suffix = self.asm.new_dynamic_label();
@@ -461,7 +461,7 @@ impl TaggedNfaJitCompiler {
                         ; jge =>byte_mismatch       // Must have at least one byte
                         ; movzx eax, BYTE [rbx + r14]
                     );
-                    self.emit_range_check(ranges, byte_mismatch)?;
+                    self.emit_range_check(&byte_class.ranges, byte_mismatch)?;
                     dynasm!(self.asm
                         ; inc r14                   // Consumed first byte
 
@@ -481,7 +481,7 @@ impl TaggedNfaJitCompiler {
                         ; jge =>byte_mismatch       // No more input - fail
                         ; movzx eax, BYTE [rbx + r14]
                     );
-                    self.emit_range_check(ranges, byte_mismatch)?;
+                    self.emit_range_check(&byte_class.ranges, byte_mismatch)?;
                     dynasm!(self.asm
                         ; inc r14                   // Consumed another byte
                         ; jmp =>try_suffix
@@ -489,7 +489,7 @@ impl TaggedNfaJitCompiler {
                         ; =>suffix_matched
                     );
                 }
-                PatternStep::NonGreedyStar(ranges, suffix) => {
+                PatternStep::NonGreedyStar(byte_class, suffix) => {
                     // Non-greedy zero-or-more: try suffix first (zero matches)
                     // If suffix fails, consume one and retry
                     let try_suffix = self.asm.new_dynamic_label();
@@ -513,7 +513,7 @@ impl TaggedNfaJitCompiler {
                         ; jge =>byte_mismatch       // No more input - fail
                         ; movzx eax, BYTE [rbx + r14]
                     );
-                    self.emit_range_check(ranges, byte_mismatch)?;
+                    self.emit_range_check(&byte_class.ranges, byte_mismatch)?;
                     dynasm!(self.asm
                         ; inc r14                   // Consumed another byte
                         ; jmp =>try_suffix
@@ -521,15 +521,15 @@ impl TaggedNfaJitCompiler {
                         ; =>suffix_matched
                     );
                 }
-                PatternStep::GreedyPlusLookahead(ranges, lookahead_steps, is_positive) => {
+                PatternStep::GreedyPlusLookahead(byte_class, lookahead_steps, is_positive) => {
                     // Greedy one-or-more with lookahead: greedily consume, then backtrack
                     // until the lookahead succeeds.
-                    self.emit_greedy_plus_with_lookahead(ranges, lookahead_steps, *is_positive, byte_mismatch)?;
+                    self.emit_greedy_plus_with_lookahead(&byte_class.ranges, lookahead_steps, *is_positive, byte_mismatch)?;
                 }
-                PatternStep::GreedyStarLookahead(ranges, lookahead_steps, is_positive) => {
+                PatternStep::GreedyStarLookahead(byte_class, lookahead_steps, is_positive) => {
                     // Greedy zero-or-more with lookahead: greedily consume, then backtrack
                     // until the lookahead succeeds.
-                    self.emit_greedy_star_with_lookahead(ranges, lookahead_steps, *is_positive, byte_mismatch)?;
+                    self.emit_greedy_star_with_lookahead(&byte_class.ranges, lookahead_steps, *is_positive, byte_mismatch)?;
                 }
                 PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_) => {
                     // Capture markers don't consume input - skip in find_fn
@@ -662,18 +662,18 @@ impl TaggedNfaJitCompiler {
                                         ; inc r14
                                     );
                                 }
-                                PatternStep::Ranges(ranges) => {
+                                PatternStep::ByteClass(byte_class) => {
                                     dynasm!(self.asm
                                         ; cmp r14, r12
                                         ; jge =>try_next_alt
                                         ; movzx eax, BYTE [rbx + r14]
                                     );
-                                    self.emit_range_check(ranges, try_next_alt)?;
+                                    self.emit_range_check(&byte_class.ranges, try_next_alt)?;
                                     dynasm!(self.asm
                                         ; inc r14
                                     );
                                 }
-                                PatternStep::GreedyPlus(ranges) => {
+                                PatternStep::GreedyPlus(byte_class) => {
                                     let loop_start = self.asm.new_dynamic_label();
                                     let loop_done = self.asm.new_dynamic_label();
 
@@ -682,7 +682,7 @@ impl TaggedNfaJitCompiler {
                                         ; jge =>try_next_alt
                                         ; movzx eax, BYTE [rbx + r14]
                                     );
-                                    self.emit_range_check(ranges, try_next_alt)?;
+                                    self.emit_range_check(&byte_class.ranges, try_next_alt)?;
                                     dynasm!(self.asm
                                         ; inc r14
                                         ; =>loop_start
@@ -690,14 +690,14 @@ impl TaggedNfaJitCompiler {
                                         ; jge =>loop_done
                                         ; movzx eax, BYTE [rbx + r14]
                                     );
-                                    self.emit_range_check(ranges, loop_done)?;
+                                    self.emit_range_check(&byte_class.ranges, loop_done)?;
                                     dynasm!(self.asm
                                         ; inc r14
                                         ; jmp =>loop_start
                                         ; =>loop_done
                                     );
                                 }
-                                PatternStep::GreedyStar(ranges) => {
+                                PatternStep::GreedyStar(byte_class) => {
                                     let loop_start = self.asm.new_dynamic_label();
                                     let loop_done = self.asm.new_dynamic_label();
 
@@ -707,7 +707,7 @@ impl TaggedNfaJitCompiler {
                                         ; jge =>loop_done
                                         ; movzx eax, BYTE [rbx + r14]
                                     );
-                                    self.emit_range_check(ranges, loop_done)?;
+                                    self.emit_range_check(&byte_class.ranges, loop_done)?;
                                     dynasm!(self.asm
                                         ; inc r14
                                         ; jmp =>loop_start
@@ -794,13 +794,13 @@ impl TaggedNfaJitCompiler {
                                     // Non-greedy in alternation - complex, fall back to interpreter
                                     return self.compile_with_fallback(None);
                                 }
-                                PatternStep::GreedyPlusLookahead(ranges, lookahead_steps, is_positive) => {
+                                PatternStep::GreedyPlusLookahead(byte_class, lookahead_steps, is_positive) => {
                                     // Greedy+ with lookahead in alternation
-                                    self.emit_greedy_plus_with_lookahead_in_alt(ranges, lookahead_steps, *is_positive, try_next_alt)?;
+                                    self.emit_greedy_plus_with_lookahead_in_alt(&byte_class.ranges, lookahead_steps, *is_positive, try_next_alt)?;
                                 }
-                                PatternStep::GreedyStarLookahead(ranges, lookahead_steps, is_positive) => {
+                                PatternStep::GreedyStarLookahead(byte_class, lookahead_steps, is_positive) => {
                                     // Greedy* with lookahead in alternation
-                                    self.emit_greedy_star_with_lookahead_in_alt(ranges, lookahead_steps, *is_positive, try_next_alt)?;
+                                    self.emit_greedy_star_with_lookahead_in_alt(&byte_class.ranges, lookahead_steps, *is_positive, try_next_alt)?;
                                 }
                             }
                         }
@@ -1047,18 +1047,18 @@ impl TaggedNfaJitCompiler {
                     ; inc r14
                 );
             }
-            PatternStep::Ranges(ranges) => {
+            PatternStep::ByteClass(byte_class) => {
                 dynasm!(self.asm
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, fail_label)?;
+                self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
                     ; inc r14
                 );
             }
-            PatternStep::GreedyPlus(ranges) => {
+            PatternStep::GreedyPlus(byte_class) => {
                 let loop_start = self.asm.new_dynamic_label();
                 let loop_done = self.asm.new_dynamic_label();
 
@@ -1067,7 +1067,7 @@ impl TaggedNfaJitCompiler {
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, fail_label)?;
+                self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
                     ; inc r14
                     ; =>loop_start
@@ -1075,14 +1075,14 @@ impl TaggedNfaJitCompiler {
                     ; jge =>loop_done
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, loop_done)?;
+                self.emit_range_check(&byte_class.ranges, loop_done)?;
                 dynasm!(self.asm
                     ; inc r14
                     ; jmp =>loop_start
                     ; =>loop_done
                 );
             }
-            PatternStep::GreedyStar(ranges) => {
+            PatternStep::GreedyStar(byte_class) => {
                 let loop_start = self.asm.new_dynamic_label();
                 let loop_done = self.asm.new_dynamic_label();
 
@@ -1092,7 +1092,7 @@ impl TaggedNfaJitCompiler {
                     ; jge =>loop_done
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, loop_done)?;
+                self.emit_range_check(&byte_class.ranges, loop_done)?;
                 dynasm!(self.asm
                     ; inc r14
                     ; jmp =>loop_start
@@ -1178,13 +1178,13 @@ impl TaggedNfaJitCompiler {
                     "",
                 ));
             }
-            PatternStep::GreedyPlusLookahead(ranges, lookahead_steps, is_positive) => {
+            PatternStep::GreedyPlusLookahead(byte_class, lookahead_steps, is_positive) => {
                 // Greedy one-or-more with lookahead in alternation
-                self.emit_greedy_plus_with_lookahead_in_alt(ranges, lookahead_steps, *is_positive, fail_label)?;
+                self.emit_greedy_plus_with_lookahead_in_alt(&byte_class.ranges, lookahead_steps, *is_positive, fail_label)?;
             }
-            PatternStep::GreedyStarLookahead(ranges, lookahead_steps, is_positive) => {
+            PatternStep::GreedyStarLookahead(byte_class, lookahead_steps, is_positive) => {
                 // Greedy zero-or-more with lookahead in alternation
-                self.emit_greedy_star_with_lookahead_in_alt(ranges, lookahead_steps, *is_positive, fail_label)?;
+                self.emit_greedy_star_with_lookahead_in_alt(&byte_class.ranges, lookahead_steps, *is_positive, fail_label)?;
             }
         }
         Ok(())
@@ -1257,13 +1257,13 @@ impl TaggedNfaJitCompiler {
                         ; inc r14
                     );
                 }
-                PatternStep::Ranges(inner_ranges) => {
+                PatternStep::ByteClass(inner_byte_class) => {
                     dynasm!(self.asm
                         ; cmp r14, r12
                         ; jge =>lookahead_inner_mismatch
                         ; movzx eax, BYTE [rbx + r14]
                     );
-                    self.emit_range_check(inner_ranges, lookahead_inner_mismatch)?;
+                    self.emit_range_check(&inner_byte_class.ranges, lookahead_inner_mismatch)?;
                     dynasm!(self.asm
                         ; inc r14
                     );
@@ -1392,13 +1392,13 @@ impl TaggedNfaJitCompiler {
                         ; inc r14
                     );
                 }
-                PatternStep::Ranges(inner_ranges) => {
+                PatternStep::ByteClass(inner_byte_class) => {
                     dynasm!(self.asm
                         ; cmp r14, r12
                         ; jge =>lookahead_inner_mismatch
                         ; movzx eax, BYTE [rbx + r14]
                     );
-                    self.emit_range_check(inner_ranges, lookahead_inner_mismatch)?;
+                    self.emit_range_check(&inner_byte_class.ranges, lookahead_inner_mismatch)?;
                     dynasm!(self.asm
                         ; inc r14
                     );
@@ -1487,21 +1487,21 @@ impl TaggedNfaJitCompiler {
                     ; inc r14                    // Consume the suffix byte
                 );
             }
-            PatternStep::Ranges(ranges) => {
+            PatternStep::ByteClass(byte_class) => {
                 // Check bounds
                 dynasm!(self.asm
                     ; cmp r14, r12
                     ; jge =>fail_label           // Not enough input
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, fail_label)?;
+                self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
                     ; inc r14                    // Consume the suffix byte
                 );
             }
             _ => {
                 // Other suffix types not supported - shouldn't reach here
-                // since extract_single_step only returns Byte or Ranges
+                // since extract_single_step only returns Byte or ByteClass
                 return Err(Error::new(
                     ErrorKind::Jit("Unsupported non-greedy suffix type".to_string()),
                     "",
@@ -1662,13 +1662,13 @@ impl TaggedNfaJitCompiler {
         // Optimize for `.*X` patterns in lookahead - use O(n) scan instead of O(n^2) backtracking
         // For `\w+(?=.*\d)`, we first match `\w+`, then scan for ANY `\d` in the remaining text
         if lookahead_steps.len() == 2 {
-            if let PatternStep::GreedyStar(star_ranges) = &lookahead_steps[0] {
+            if let PatternStep::GreedyStar(star_byte_class) = &lookahead_steps[0] {
                 match &lookahead_steps[1] {
-                    PatternStep::Ranges(final_ranges) => {
+                    PatternStep::ByteClass(final_byte_class) => {
                         return self.emit_greedy_plus_with_star_scan_lookahead(
                             ranges,
-                            star_ranges,
-                            final_ranges,
+                            &star_byte_class.ranges,
+                            &final_byte_class.ranges,
                             is_positive,
                             fail_label,
                         );
@@ -1677,7 +1677,7 @@ impl TaggedNfaJitCompiler {
                         let final_ranges = vec![ByteRange { start: *byte, end: *byte }];
                         return self.emit_greedy_plus_with_star_scan_lookahead(
                             ranges,
-                            star_ranges,
+                            &star_byte_class.ranges,
                             &final_ranges,
                             is_positive,
                             fail_label,
@@ -1745,13 +1745,13 @@ impl TaggedNfaJitCompiler {
                         ; inc r14
                     );
                 }
-                PatternStep::Ranges(inner_ranges) => {
+                PatternStep::ByteClass(inner_byte_class) => {
                     dynasm!(self.asm
                         ; cmp r14, r12
                         ; jge =>lookahead_inner_mismatch
                         ; movzx eax, BYTE [rbx + r14]
                     );
-                    self.emit_range_check(inner_ranges, lookahead_inner_mismatch)?;
+                    self.emit_range_check(&inner_byte_class.ranges, lookahead_inner_mismatch)?;
                     dynasm!(self.asm
                         ; inc r14
                     );
@@ -1967,13 +1967,13 @@ impl TaggedNfaJitCompiler {
 
         // Optimize for `.*X` patterns in lookahead - use O(n) scan instead of O(n^2) backtracking
         if lookahead_steps.len() == 2 {
-            if let PatternStep::GreedyStar(star_ranges) = &lookahead_steps[0] {
+            if let PatternStep::GreedyStar(star_byte_class) = &lookahead_steps[0] {
                 match &lookahead_steps[1] {
-                    PatternStep::Ranges(final_ranges) => {
+                    PatternStep::ByteClass(final_byte_class) => {
                         return self.emit_greedy_star_with_star_scan_lookahead(
                             ranges,
-                            star_ranges,
-                            final_ranges,
+                            &star_byte_class.ranges,
+                            &final_byte_class.ranges,
                             is_positive,
                             fail_label,
                         );
@@ -1982,7 +1982,7 @@ impl TaggedNfaJitCompiler {
                         let final_ranges = vec![ByteRange { start: *byte, end: *byte }];
                         return self.emit_greedy_star_with_star_scan_lookahead(
                             ranges,
-                            star_ranges,
+                            &star_byte_class.ranges,
                             &final_ranges,
                             is_positive,
                             fail_label,
@@ -2041,13 +2041,13 @@ impl TaggedNfaJitCompiler {
                         ; inc r14
                     );
                 }
-                PatternStep::Ranges(inner_ranges) => {
+                PatternStep::ByteClass(inner_byte_class) => {
                     dynasm!(self.asm
                         ; cmp r14, r12
                         ; jge =>lookahead_inner_mismatch
                         ; movzx eax, BYTE [rbx + r14]
                     );
-                    self.emit_range_check(inner_ranges, lookahead_inner_mismatch)?;
+                    self.emit_range_check(&inner_byte_class.ranges, lookahead_inner_mismatch)?;
                     dynasm!(self.asm
                         ; inc r14
                     );
@@ -2492,18 +2492,18 @@ impl TaggedNfaJitCompiler {
                     ; inc r14
                 );
             }
-            PatternStep::Ranges(ranges) => {
+            PatternStep::ByteClass(byte_class) => {
                 dynasm!(self.asm
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, fail_label)?;
+                self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
                     ; inc r14
                 );
             }
-            PatternStep::GreedyPlus(ranges) => {
+            PatternStep::GreedyPlus(byte_class) => {
                 // Nested greedy+ - emit simple version (no recursive backtracking for simplicity)
                 let loop_start = self.asm.new_dynamic_label();
                 let loop_done = self.asm.new_dynamic_label();
@@ -2513,7 +2513,7 @@ impl TaggedNfaJitCompiler {
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, fail_label)?;
+                self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
                     ; inc r14
                     ; =>loop_start
@@ -2521,14 +2521,14 @@ impl TaggedNfaJitCompiler {
                     ; jge =>loop_done
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, loop_done)?;
+                self.emit_range_check(&byte_class.ranges, loop_done)?;
                 dynasm!(self.asm
                     ; inc r14
                     ; jmp =>loop_start
                     ; =>loop_done
                 );
             }
-            PatternStep::GreedyStar(ranges) => {
+            PatternStep::GreedyStar(byte_class) => {
                 let loop_start = self.asm.new_dynamic_label();
                 let loop_done = self.asm.new_dynamic_label();
 
@@ -2538,7 +2538,7 @@ impl TaggedNfaJitCompiler {
                     ; jge =>loop_done
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, loop_done)?;
+                self.emit_range_check(&byte_class.ranges, loop_done)?;
                 dynasm!(self.asm
                     ; inc r14
                     ; jmp =>loop_start
@@ -2678,16 +2678,16 @@ impl TaggedNfaJitCompiler {
     ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
 
-        // Optimize common case: `.*X` where X is a single step (Ranges or Byte)
+        // Optimize common case: `.*X` where X is a single step (ByteClass or Byte)
         // For `(?=.*\d)`, we need to check if a match of X exists within the range that `.*` can match
         // This is much faster than backtracking: O(n) scan vs O(n^2) backtracking
         if inner_steps.len() == 2 {
-            if let PatternStep::GreedyStar(star_ranges) = &inner_steps[0] {
+            if let PatternStep::GreedyStar(star_byte_class) = &inner_steps[0] {
                 match &inner_steps[1] {
-                    PatternStep::Ranges(final_ranges) => {
+                    PatternStep::ByteClass(final_byte_class) => {
                         return self.emit_lookahead_star_scan(
-                            star_ranges,
-                            final_ranges,
+                            &star_byte_class.ranges,
+                            &final_byte_class.ranges,
                             fail_label,
                             positive,
                         );
@@ -2696,7 +2696,7 @@ impl TaggedNfaJitCompiler {
                         // Convert single byte to a range for uniform handling
                         let final_ranges = vec![ByteRange { start: *byte, end: *byte }];
                         return self.emit_lookahead_star_scan(
-                            star_ranges,
+                            &star_byte_class.ranges,
                             &final_ranges,
                             fail_label,
                             positive,
@@ -2742,7 +2742,7 @@ impl TaggedNfaJitCompiler {
                         );
                     }
                 }
-                PatternStep::Ranges(ranges) => {
+                PatternStep::ByteClass(byte_class) => {
                     // Check bounds
                     if positive {
                         dynasm!(self.asm
@@ -2752,7 +2752,7 @@ impl TaggedNfaJitCompiler {
                         );
                         // Use a temp label for range check failure
                         let range_fail = self.asm.new_dynamic_label();
-                        self.emit_range_check_with_label(ranges, range_fail, fail_label)?;
+                        self.emit_range_check_with_label(&byte_class.ranges, range_fail, fail_label)?;
                         dynasm!(self.asm
                             ; inc r9
                         );
@@ -2763,7 +2763,7 @@ impl TaggedNfaJitCompiler {
                             ; movzx eax, BYTE [rbx + r9]
                         );
                         let range_fail = self.asm.new_dynamic_label();
-                        self.emit_range_check_with_label(ranges, range_fail, inner_match)?;
+                        self.emit_range_check_with_label(&byte_class.ranges, range_fail, inner_match)?;
                         dynasm!(self.asm
                             ; inc r9
                         );
@@ -2803,7 +2803,7 @@ impl TaggedNfaJitCompiler {
                         );
                     }
                 }
-                PatternStep::GreedyStar(ranges) => {
+                PatternStep::GreedyStar(byte_class) => {
                     // Greedy star in lookahead: match as many as possible
                     // r9 is advanced through matching characters
                     let loop_start = self.asm.new_dynamic_label();
@@ -2817,7 +2817,7 @@ impl TaggedNfaJitCompiler {
                     );
 
                     // Check if byte matches any range
-                    self.emit_range_check(ranges, loop_done)?;
+                    self.emit_range_check(&byte_class.ranges, loop_done)?;
 
                     dynasm!(self.asm
                         ; inc r9                       // Consumed another byte
@@ -2826,7 +2826,7 @@ impl TaggedNfaJitCompiler {
                     );
                     // r9 now points past all matched characters
                 }
-                PatternStep::GreedyPlus(ranges) => {
+                PatternStep::GreedyPlus(byte_class) => {
                     // Greedy plus in lookahead: match at least one, then as many as possible
                     // First check we have at least one match
                     if positive {
@@ -2835,14 +2835,14 @@ impl TaggedNfaJitCompiler {
                             ; jge =>fail_label         // No input - fail
                             ; movzx eax, BYTE [rbx + r9]
                         );
-                        self.emit_range_check(ranges, fail_label)?;
+                        self.emit_range_check(&byte_class.ranges, fail_label)?;
                     } else {
                         dynasm!(self.asm
                             ; cmp r9, r12
                             ; jge =>inner_match        // No input - inner didn't match
                             ; movzx eax, BYTE [rbx + r9]
                         );
-                        self.emit_range_check(ranges, inner_match)?;
+                        self.emit_range_check(&byte_class.ranges, inner_match)?;
                     }
 
                     dynasm!(self.asm
@@ -2860,7 +2860,7 @@ impl TaggedNfaJitCompiler {
                         ; movzx eax, BYTE [rbx + r9]
                     );
 
-                    self.emit_range_check(ranges, loop_done)?;
+                    self.emit_range_check(&byte_class.ranges, loop_done)?;
 
                     dynasm!(self.asm
                         ; inc r9
@@ -3196,11 +3196,11 @@ impl TaggedNfaJitCompiler {
                         ; inc r14
                     );
                 }
-                PatternStep::Ranges(ranges) => {
+                PatternStep::ByteClass(byte_class) => {
                     dynasm!(self.asm
                         ; movzx eax, BYTE [rbx + r14]
                     );
-                    self.emit_range_check(ranges, inner_mismatch)?;
+                    self.emit_range_check(&byte_class.ranges, inner_mismatch)?;
                     dynasm!(self.asm
                         ; inc r14
                     );
@@ -3876,18 +3876,18 @@ impl TaggedNfaJitCompiler {
                     ; inc r14
                 );
             }
-            PatternStep::Ranges(ranges) => {
+            PatternStep::ByteClass(byte_class) => {
                 dynasm!(self.asm
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, fail_label)?;
+                self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
                     ; inc r14
                 );
             }
-            PatternStep::GreedyPlus(ranges) => {
+            PatternStep::GreedyPlus(byte_class) => {
                 let loop_start = self.asm.new_dynamic_label();
                 let loop_done = self.asm.new_dynamic_label();
 
@@ -3896,7 +3896,7 @@ impl TaggedNfaJitCompiler {
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, fail_label)?;
+                self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
                     ; inc r14
                     ; =>loop_start
@@ -3904,14 +3904,14 @@ impl TaggedNfaJitCompiler {
                     ; jge =>loop_done
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, loop_done)?;
+                self.emit_range_check(&byte_class.ranges, loop_done)?;
                 dynasm!(self.asm
                     ; inc r14
                     ; jmp =>loop_start
                     ; =>loop_done
                 );
             }
-            PatternStep::GreedyStar(ranges) => {
+            PatternStep::GreedyStar(byte_class) => {
                 let loop_start = self.asm.new_dynamic_label();
                 let loop_done = self.asm.new_dynamic_label();
 
@@ -3921,7 +3921,7 @@ impl TaggedNfaJitCompiler {
                     ; jge =>loop_done
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, loop_done)?;
+                self.emit_range_check(&byte_class.ranges, loop_done)?;
                 dynasm!(self.asm
                     ; inc r14
                     ; jmp =>loop_start
@@ -4023,13 +4023,13 @@ impl TaggedNfaJitCompiler {
                 // Zero-width assertion - doesn't consume input, doesn't affect captures
                 self.emit_lookbehind_check(inner_steps, *min_len, fail_label, false)?;
             }
-            PatternStep::GreedyPlusLookahead(ranges, lookahead_steps, is_positive) => {
+            PatternStep::GreedyPlusLookahead(byte_class, lookahead_steps, is_positive) => {
                 // Greedy+ with lookahead in captures path
-                self.emit_greedy_plus_with_lookahead_in_captures(ranges, lookahead_steps, *is_positive, fail_label)?;
+                self.emit_greedy_plus_with_lookahead_in_captures(&byte_class.ranges, lookahead_steps, *is_positive, fail_label)?;
             }
-            PatternStep::GreedyStarLookahead(ranges, lookahead_steps, is_positive) => {
+            PatternStep::GreedyStarLookahead(byte_class, lookahead_steps, is_positive) => {
                 // Greedy* with lookahead in captures path
-                self.emit_greedy_star_with_lookahead_in_captures(ranges, lookahead_steps, *is_positive, fail_label)?;
+                self.emit_greedy_star_with_lookahead_in_captures(&byte_class.ranges, lookahead_steps, *is_positive, fail_label)?;
             }
             PatternStep::Backref(idx) => {
                 // Backreference: compare captured text with current position
@@ -4147,7 +4147,7 @@ impl TaggedNfaJitCompiler {
                     ; =>at_end
                 );
             }
-            PatternStep::NonGreedyPlus(ranges, suffix) => {
+            PatternStep::NonGreedyPlus(byte_class, suffix) => {
                 // Non-greedy one-or-more in captures_fn
                 let try_suffix = self.asm.new_dynamic_label();
                 let consume_more = self.asm.new_dynamic_label();
@@ -4159,7 +4159,7 @@ impl TaggedNfaJitCompiler {
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, fail_label)?;
+                self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
                     ; inc r14
 
@@ -4177,7 +4177,7 @@ impl TaggedNfaJitCompiler {
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, fail_label)?;
+                self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
                     ; inc r14
                     ; jmp =>try_suffix
@@ -4185,7 +4185,7 @@ impl TaggedNfaJitCompiler {
                     ; =>suffix_matched
                 );
             }
-            PatternStep::NonGreedyStar(ranges, suffix) => {
+            PatternStep::NonGreedyStar(byte_class, suffix) => {
                 // Non-greedy zero-or-more in captures_fn
                 let try_suffix = self.asm.new_dynamic_label();
                 let consume_more = self.asm.new_dynamic_label();
@@ -4206,7 +4206,7 @@ impl TaggedNfaJitCompiler {
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
-                self.emit_range_check(ranges, fail_label)?;
+                self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
                     ; inc r14
                     ; jmp =>try_suffix
@@ -4223,7 +4223,7 @@ impl TaggedNfaJitCompiler {
     fn step_name(step: &PatternStep) -> &'static str {
         match step {
             PatternStep::Byte(_) => "Byte",
-            PatternStep::Ranges(_) => "Ranges",
+            PatternStep::ByteClass(_) => "ByteClass",
             PatternStep::GreedyPlus(_) => "GreedyPlus",
             PatternStep::GreedyStar(_) => "GreedyStar",
             PatternStep::GreedyPlusLookahead(_, _, _) => "GreedyPlusLookahead",
@@ -4252,7 +4252,7 @@ impl TaggedNfaJitCompiler {
     /// Calculates the minimum length of input needed to match a pattern.
     fn calc_min_len(steps: &[PatternStep]) -> usize {
         steps.iter().map(|s| match s {
-            PatternStep::Byte(_) | PatternStep::Ranges(_) => 1,
+            PatternStep::Byte(_) | PatternStep::ByteClass(_) => 1,
             PatternStep::GreedyPlus(_) => 1,
             PatternStep::GreedyStar(_) => 0,
             // Greedy with lookahead: lookahead is zero-width, only repetition counts
@@ -4546,7 +4546,7 @@ impl TaggedNfaJitCompiler {
 
                     // Greedy loop: first epsilon goes back to current (loop), second goes forward
                     if eps0 == current {
-                        steps.push(PatternStep::GreedyPlus(ranges));
+                        steps.push(PatternStep::GreedyPlus(ByteClass::new(ranges)));
                         current = eps1;
                         visited[target as usize] = true;
                         continue;
@@ -4563,7 +4563,7 @@ impl TaggedNfaJitCompiler {
                         // Extract the suffix (what comes after the quantifier)
                         let exit_state = marker_state.epsilon[0];
                         if let Some(suffix) = self.extract_single_step(exit_state) {
-                            steps.push(PatternStep::NonGreedyPlus(ranges, Box::new(suffix)));
+                            steps.push(PatternStep::NonGreedyPlus(ByteClass::new(ranges), Box::new(suffix)));
                             // Skip past the exit state and its suffix
                             visited[target as usize] = true;
                             visited[eps0 as usize] = true;
@@ -4585,7 +4585,7 @@ impl TaggedNfaJitCompiler {
                 if ranges.len() == 1 && ranges[0].start == ranges[0].end {
                     steps.push(PatternStep::Byte(ranges[0].start));
                 } else {
-                    steps.push(PatternStep::Ranges(ranges));
+                    steps.push(PatternStep::ByteClass(ByteClass::new(ranges)));
                 }
                 current = target;
                 continue;
@@ -4633,7 +4633,7 @@ impl TaggedNfaJitCompiler {
 
                                 // Extract the suffix
                                 if let Some(suffix) = self.extract_single_step(exit_state) {
-                                    steps.push(PatternStep::NonGreedyStar(ranges, Box::new(suffix)));
+                                    steps.push(PatternStep::NonGreedyStar(ByteClass::new(ranges), Box::new(suffix)));
                                     visited[current as usize] = true;
                                     visited[state.epsilon[0] as usize] = true;
                                     visited[pattern_start as usize] = true;
@@ -4741,7 +4741,7 @@ impl TaggedNfaJitCompiler {
 
                     // Check if one epsilon leads back to current (greedy loop)
                     if eps0 == current {
-                        steps.push(PatternStep::GreedyPlus(ranges));
+                        steps.push(PatternStep::GreedyPlus(ByteClass::new(ranges)));
                         if visited[target as usize] {
                             return Vec::new();
                         }
@@ -4749,7 +4749,7 @@ impl TaggedNfaJitCompiler {
                         current = eps1; // Continue from exit path
                         continue;
                     } else if eps1 == current {
-                        steps.push(PatternStep::GreedyPlus(ranges));
+                        steps.push(PatternStep::GreedyPlus(ByteClass::new(ranges)));
                         if visited[target as usize] {
                             return Vec::new();
                         }
@@ -4767,7 +4767,7 @@ impl TaggedNfaJitCompiler {
                 if ranges.len() == 1 && ranges[0].start == ranges[0].end {
                     steps.push(PatternStep::Byte(ranges[0].start));
                 } else {
-                    steps.push(PatternStep::Ranges(ranges));
+                    steps.push(PatternStep::ByteClass(ByteClass::new(ranges)));
                 }
                 current = target;
                 continue;
@@ -4792,13 +4792,13 @@ impl TaggedNfaJitCompiler {
                 // Try to detect: eps0 has transitions that loop, eps1 exits
                 // or vice versa
                 if let Some((ranges, exit_state)) = self.detect_greedy_star_lookaround(inner_nfa, current, eps0, eps1, &visited) {
-                    steps.push(PatternStep::GreedyStar(ranges));
+                    steps.push(PatternStep::GreedyStar(ByteClass::new(ranges)));
                     visited[current as usize] = true;
                     current = exit_state;
                     continue;
                 }
                 if let Some((ranges, exit_state)) = self.detect_greedy_star_lookaround(inner_nfa, current, eps1, eps0, &visited) {
-                    steps.push(PatternStep::GreedyStar(ranges));
+                    steps.push(PatternStep::GreedyStar(ByteClass::new(ranges)));
                     visited[current as usize] = true;
                     current = exit_state;
                     continue;
@@ -5061,7 +5061,7 @@ impl TaggedNfaJitCompiler {
                 return if ranges.len() == 1 && ranges[0].start == ranges[0].end {
                     Some(PatternStep::Byte(ranges[0].start))
                 } else {
-                    Some(PatternStep::Ranges(ranges))
+                    Some(PatternStep::ByteClass(ByteClass::new(ranges)))
                 };
             }
 

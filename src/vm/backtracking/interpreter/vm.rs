@@ -5,6 +5,7 @@
 //! to a flat bytecode representation first, then executes with minimal overhead.
 
 use crate::hir::{CodepointClass, Hir, HirAnchor, HirExpr};
+use crate::nfa::{ByteClass, ByteRange};
 
 use super::super::shared::{decode_utf8, is_word_byte, Op};
 
@@ -15,7 +16,8 @@ pub struct BacktrackingVm {
     /// Number of capture groups (not slots).
     capture_count: u32,
     /// Large byte classes (for classes with >4 ranges).
-    byte_classes: Vec<Vec<(u8, u8)>>,
+    /// Uses ByteClass for fast O(1) bitmap lookup.
+    byte_classes: Vec<ByteClass>,
     /// Large codepoint classes (for Unicode classes with multiple ranges).
     /// Uses CodepointClass for fast ASCII bitmap lookup.
     cp_classes: Vec<CodepointClass>,
@@ -263,8 +265,9 @@ impl BacktrackingVm {
                 Op::ByteClassRef { index, negated } => {
                     if pos < input.len() {
                         let b = input[pos];
-                        let ranges = &self.byte_classes[index as usize];
-                        let in_class = ranges.iter().any(|&(lo, hi)| b >= lo && b <= hi);
+                        let byte_class = &self.byte_classes[index as usize];
+                        // Use ByteClass::contains() for O(1) bitmap lookup
+                        let in_class = byte_class.contains(b);
                         let matched = if negated { !in_class } else { in_class };
                         if matched {
                             pos += 1;
@@ -485,7 +488,7 @@ impl BacktrackingVm {
 /// Compiler from HIR to bytecode.
 struct Compiler {
     code: Vec<Op>,
-    byte_classes: Vec<Vec<(u8, u8)>>,
+    byte_classes: Vec<ByteClass>,
     cp_classes: Vec<CodepointClass>,
 }
 
@@ -536,7 +539,13 @@ impl Compiler {
                 } else {
                     // Too many ranges - store in byte_classes table and use ByteClassRef
                     let index = self.byte_classes.len() as u16;
-                    self.byte_classes.push(class.ranges.clone());
+                    // Convert (u8, u8) tuples to ByteRange and create ByteClass with bitmap
+                    let byte_ranges: Vec<ByteRange> = class
+                        .ranges
+                        .iter()
+                        .map(|&(lo, hi)| ByteRange::new(lo, hi))
+                        .collect();
+                    self.byte_classes.push(ByteClass::new(byte_ranges));
                     self.emit(Op::ByteClassRef {
                         index,
                         negated: class.negated,

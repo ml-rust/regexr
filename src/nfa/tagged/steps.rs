@@ -2,7 +2,7 @@
 //!
 //! Extracts pattern steps from NFA for fast step-based matching.
 
-use crate::nfa::{ByteRange, Nfa, NfaInstruction, StateId};
+use crate::nfa::{ByteClass, ByteRange, Nfa, NfaInstruction, StateId};
 use super::shared::PatternStep;
 
 /// Combines greedy quantifiers followed by lookahead into combined variants.
@@ -234,7 +234,7 @@ impl<'a> StepExtractor<'a> {
 
                     if eps0 == current {
                         // Greedy plus: loop back
-                        steps.push(PatternStep::GreedyPlus(ranges));
+                        steps.push(PatternStep::GreedyPlus(ByteClass::new(ranges)));
                         if visited[target as usize] {
                             return Vec::new();
                         }
@@ -253,7 +253,7 @@ impl<'a> StepExtractor<'a> {
                 if ranges.len() == 1 && ranges[0].start == ranges[0].end {
                     steps.push(PatternStep::Byte(ranges[0].start));
                 } else {
-                    steps.push(PatternStep::Ranges(ranges));
+                    steps.push(PatternStep::ByteClass(ByteClass::new(ranges)));
                 }
                 current = target;
                 continue;
@@ -437,13 +437,13 @@ impl<'a> StepExtractor<'a> {
                     let eps1 = target_state.epsilon[1];
 
                     if eps0 == current {
-                        steps.push(PatternStep::GreedyPlus(ranges));
+                        steps.push(PatternStep::GreedyPlus(ByteClass::new(ranges)));
                         visited[current as usize] = true;
                         visited[target as usize] = true;
                         current = eps1;
                         continue;
                     } else if eps1 == current {
-                        steps.push(PatternStep::GreedyPlus(ranges));
+                        steps.push(PatternStep::GreedyPlus(ByteClass::new(ranges)));
                         visited[current as usize] = true;
                         visited[target as usize] = true;
                         current = eps0;
@@ -452,7 +452,7 @@ impl<'a> StepExtractor<'a> {
                 }
 
                 // Simple transition
-                steps.push(PatternStep::Ranges(ranges));
+                steps.push(PatternStep::ByteClass(ByteClass::new(ranges)));
                 visited[current as usize] = true;
                 current = target;
                 continue;
@@ -476,7 +476,7 @@ impl<'a> StepExtractor<'a> {
                 if let Some((ranges, exit_state)) = self.detect_greedy_star(current, eps0, eps1, visited) {
                     // #[cfg(debug_assertions)]
                     // eprintln!("DEBUG extract_branch: detected greedy star at state {}", current);
-                    steps.push(PatternStep::GreedyStar(ranges));
+                    steps.push(PatternStep::GreedyStar(ByteClass::new(ranges)));
                     visited[current as usize] = true;
                     current = exit_state;
                     continue;
@@ -484,7 +484,7 @@ impl<'a> StepExtractor<'a> {
                 if let Some((ranges, exit_state)) = self.detect_greedy_star(current, eps1, eps0, visited) {
                     // #[cfg(debug_assertions)]
                     // eprintln!("DEBUG extract_branch: detected greedy star at state {} (swapped)", current);
-                    steps.push(PatternStep::GreedyStar(ranges));
+                    steps.push(PatternStep::GreedyStar(ByteClass::new(ranges)));
                     visited[current as usize] = true;
                     current = exit_state;
                     continue;
@@ -666,7 +666,7 @@ impl<'a> StepExtractor<'a> {
                     // Check if one epsilon leads back to current (greedy loop)
                     if eps0 == current {
                         // Greedy plus: must match at least one
-                        steps.push(PatternStep::GreedyPlus(ranges));
+                        steps.push(PatternStep::GreedyPlus(ByteClass::new(ranges)));
                         if visited[target as usize] {
                             return Vec::new();
                         }
@@ -675,7 +675,7 @@ impl<'a> StepExtractor<'a> {
                         continue;
                     } else if eps1 == current {
                         // Greedy plus: loop back is second epsilon
-                        steps.push(PatternStep::GreedyPlus(ranges));
+                        steps.push(PatternStep::GreedyPlus(ByteClass::new(ranges)));
                         if visited[target as usize] {
                             return Vec::new();
                         }
@@ -698,7 +698,7 @@ impl<'a> StepExtractor<'a> {
                 if ranges.len() == 1 && ranges[0].start == ranges[0].end {
                     steps.push(PatternStep::Byte(ranges[0].start));
                 } else {
-                    steps.push(PatternStep::Ranges(ranges));
+                    steps.push(PatternStep::ByteClass(ByteClass::new(ranges)));
                 }
                 current = target;
                 continue;
@@ -722,13 +722,13 @@ impl<'a> StepExtractor<'a> {
                 // Try to detect: eps0 has transitions that loop, eps1 exits
                 // or vice versa
                 if let Some((ranges, exit_state)) = self.detect_greedy_star_in_lookaround(inner_nfa, current, eps0, eps1, &visited) {
-                    steps.push(PatternStep::GreedyStar(ranges));
+                    steps.push(PatternStep::GreedyStar(ByteClass::new(ranges)));
                     visited[current as usize] = true;
                     current = exit_state;
                     continue;
                 }
                 if let Some((ranges, exit_state)) = self.detect_greedy_star_in_lookaround(inner_nfa, current, eps1, eps0, &visited) {
-                    steps.push(PatternStep::GreedyStar(ranges));
+                    steps.push(PatternStep::GreedyStar(ByteClass::new(ranges)));
                     visited[current as usize] = true;
                     current = exit_state;
                     continue;
@@ -821,7 +821,7 @@ impl<'a> StepExtractor<'a> {
                 if ranges.len() == 1 && ranges[0].start == ranges[0].end {
                     steps.push(PatternStep::Byte(ranges[0].start));
                 } else {
-                    steps.push(PatternStep::Ranges(ranges));
+                    steps.push(PatternStep::ByteClass(ByteClass::new(ranges)));
                 }
                 current = target;
                 continue;
@@ -998,7 +998,7 @@ impl<'a> StepExtractor<'a> {
         for step in steps {
             match step {
                 PatternStep::Byte(_) => len += 1,
-                PatternStep::Ranges(_) => len += 1,
+                PatternStep::ByteClass(_) => len += 1,
                 PatternStep::GreedyPlus(_) => len += 1, // At least one
                 PatternStep::GreedyStar(_) => {}, // Zero or more
                 PatternStep::GreedyPlusLookahead(_, _, _) => len += 1,

@@ -220,6 +220,58 @@ impl ByteRange {
     }
 }
 
+/// A byte class with precomputed 256-bit bitmap for fast O(1) membership testing.
+/// Stores both the original ranges (for debugging/serialization) and the bitmap.
+#[derive(Debug, Clone)]
+pub struct ByteClass {
+    /// Original byte ranges (kept for reference).
+    pub ranges: Vec<ByteRange>,
+    /// Precomputed 256-bit bitmap for O(1) lookup.
+    /// bitmap[0] = bits 0-63, bitmap[1] = bits 64-127,
+    /// bitmap[2] = bits 128-191, bitmap[3] = bits 192-255
+    bitmap: [u64; 4],
+}
+
+impl ByteClass {
+    /// Creates a new byte class from ranges with precomputed bitmap.
+    pub fn new(ranges: Vec<ByteRange>) -> Self {
+        let bitmap = Self::compute_bitmap(&ranges);
+        Self { ranges, bitmap }
+    }
+
+    /// Creates a byte class from a slice of ranges.
+    pub fn from_slice(ranges: &[ByteRange]) -> Self {
+        Self::new(ranges.to_vec())
+    }
+
+    /// Computes the 256-bit bitmap from ranges.
+    fn compute_bitmap(ranges: &[ByteRange]) -> [u64; 4] {
+        let mut bits = [0u64; 4];
+        for range in ranges {
+            for byte in range.start..=range.end {
+                let idx = (byte / 64) as usize;
+                let bit = byte % 64;
+                bits[idx] |= 1u64 << bit;
+            }
+        }
+        bits
+    }
+
+    /// Checks if a byte is in this class. O(1) operation.
+    #[inline(always)]
+    pub fn contains(&self, byte: u8) -> bool {
+        let idx = (byte / 64) as usize;
+        let bit = byte % 64;
+        (self.bitmap[idx] & (1u64 << bit)) != 0
+    }
+
+    /// Returns the raw bitmap for JIT code generation.
+    #[inline]
+    pub fn bitmap(&self) -> &[u64; 4] {
+        &self.bitmap
+    }
+}
+
 /// Special instructions for NFA states.
 #[derive(Debug, Clone)]
 pub enum NfaInstruction {
