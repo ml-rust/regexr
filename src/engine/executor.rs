@@ -788,7 +788,10 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
                     capture_vm: RwLock::new(None),
                     capture_ctx: RwLock::new(None),
                     backtracking_vm: None,
-                    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
+                    #[cfg(all(
+                        feature = "jit",
+                        any(target_arch = "x86_64", target_arch = "aarch64")
+                    ))]
                     backtracking_jit: None,
                 });
             }

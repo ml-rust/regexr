@@ -45,8 +45,6 @@ pub(super) struct TaggedNfaJitCompiler {
 impl TaggedNfaJitCompiler {
     #[allow(dead_code)]
     fn new(nfa: Nfa, liveness: NfaLiveness) -> Result<Self> {
-        use dynasmrt::DynasmLabelApi;
-
         let mut asm = dynasmrt::aarch64::Assembler::new().map_err(|e| {
             Error::new(
                 ErrorKind::Jit(format!("Failed to create assembler: {:?}", e)),
@@ -156,22 +154,31 @@ impl TaggedNfaJitCompiler {
             | PatternStep::GreedyPlusLookahead(_, _, _)
             | PatternStep::GreedyStarLookahead(_, _, _)
             | PatternStep::Backref(_) => true,
-            PatternStep::Alt(alts) => alts.iter().any(|a| a.iter().any(|s| Self::step_consumes_input(s))),
+            PatternStep::Alt(alts) => alts
+                .iter()
+                .any(|a| a.iter().any(|s| Self::step_consumes_input(s))),
             _ => false,
         }
     }
 
     fn calc_min_len(steps: &[PatternStep]) -> usize {
-        steps.iter().map(|s| match s {
-            PatternStep::Byte(_) | PatternStep::ByteClass(_) => 1,
-            PatternStep::GreedyPlus(_) | PatternStep::GreedyPlusLookahead(_, _, _) => 1,
-            PatternStep::GreedyStar(_) | PatternStep::GreedyStarLookahead(_, _, _) => 0,
-            PatternStep::NonGreedyPlus(_, suf) => 1 + Self::calc_min_len(&[(**suf).clone()]),
-            PatternStep::NonGreedyStar(_, suf) => Self::calc_min_len(&[(**suf).clone()]),
-            PatternStep::Alt(alts) => alts.iter().map(|a| Self::calc_min_len(a)).min().unwrap_or(0),
-            PatternStep::CodepointClass(_, _) | PatternStep::GreedyCodepointPlus(_) => 1,
-            _ => 0,
-        }).sum()
+        steps
+            .iter()
+            .map(|s| match s {
+                PatternStep::Byte(_) | PatternStep::ByteClass(_) => 1,
+                PatternStep::GreedyPlus(_) | PatternStep::GreedyPlusLookahead(_, _, _) => 1,
+                PatternStep::GreedyStar(_) | PatternStep::GreedyStarLookahead(_, _, _) => 0,
+                PatternStep::NonGreedyPlus(_, suf) => 1 + Self::calc_min_len(&[(**suf).clone()]),
+                PatternStep::NonGreedyStar(_, suf) => Self::calc_min_len(&[(**suf).clone()]),
+                PatternStep::Alt(alts) => alts
+                    .iter()
+                    .map(|a| Self::calc_min_len(a))
+                    .min()
+                    .unwrap_or(0),
+                PatternStep::CodepointClass(_, _) | PatternStep::GreedyCodepointPlus(_) => 1,
+                _ => 0,
+            })
+            .sum()
     }
 
     fn combine_greedy_with_lookahead(steps: Vec<PatternStep>) -> Vec<PatternStep> {
@@ -179,37 +186,56 @@ impl TaggedNfaJitCompiler {
         let mut i = 0;
         while i < steps.len() {
             match &steps[i] {
-                PatternStep::GreedyPlus(r) if i + 1 < steps.len() => {
-                    match &steps[i + 1] {
-                        PatternStep::PositiveLookahead(inner) => {
-                            result.push(PatternStep::GreedyPlusLookahead(r.clone(), inner.clone(), true));
-                            i += 2; continue;
-                        }
-                        PatternStep::NegativeLookahead(inner) => {
-                            result.push(PatternStep::GreedyPlusLookahead(r.clone(), inner.clone(), false));
-                            i += 2; continue;
-                        }
-                        _ => {}
+                PatternStep::GreedyPlus(r) if i + 1 < steps.len() => match &steps[i + 1] {
+                    PatternStep::PositiveLookahead(inner) => {
+                        result.push(PatternStep::GreedyPlusLookahead(
+                            r.clone(),
+                            inner.clone(),
+                            true,
+                        ));
+                        i += 2;
+                        continue;
                     }
-                }
-                PatternStep::GreedyStar(r) if i + 1 < steps.len() => {
-                    match &steps[i + 1] {
-                        PatternStep::PositiveLookahead(inner) => {
-                            result.push(PatternStep::GreedyStarLookahead(r.clone(), inner.clone(), true));
-                            i += 2; continue;
-                        }
-                        PatternStep::NegativeLookahead(inner) => {
-                            result.push(PatternStep::GreedyStarLookahead(r.clone(), inner.clone(), false));
-                            i += 2; continue;
-                        }
-                        _ => {}
+                    PatternStep::NegativeLookahead(inner) => {
+                        result.push(PatternStep::GreedyPlusLookahead(
+                            r.clone(),
+                            inner.clone(),
+                            false,
+                        ));
+                        i += 2;
+                        continue;
                     }
-                }
+                    _ => {}
+                },
+                PatternStep::GreedyStar(r) if i + 1 < steps.len() => match &steps[i + 1] {
+                    PatternStep::PositiveLookahead(inner) => {
+                        result.push(PatternStep::GreedyStarLookahead(
+                            r.clone(),
+                            inner.clone(),
+                            true,
+                        ));
+                        i += 2;
+                        continue;
+                    }
+                    PatternStep::NegativeLookahead(inner) => {
+                        result.push(PatternStep::GreedyStarLookahead(
+                            r.clone(),
+                            inner.clone(),
+                            false,
+                        ));
+                        i += 2;
+                        continue;
+                    }
+                    _ => {}
+                },
                 PatternStep::Alt(alts) => {
-                    let combined: Vec<Vec<PatternStep>> = alts.iter()
-                        .map(|a| Self::combine_greedy_with_lookahead(a.clone())).collect();
+                    let combined: Vec<Vec<PatternStep>> = alts
+                        .iter()
+                        .map(|a| Self::combine_greedy_with_lookahead(a.clone()))
+                        .collect();
                     result.push(PatternStep::Alt(combined));
-                    i += 1; continue;
+                    i += 1;
+                    continue;
                 }
                 _ => {}
             }
@@ -219,7 +245,11 @@ impl TaggedNfaJitCompiler {
         result
     }
 
-    fn emit_range_check(&mut self, ranges: &[ByteRange], fail_label: dynasmrt::DynamicLabel) -> Result<()> {
+    fn emit_range_check(
+        &mut self,
+        ranges: &[ByteRange],
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         if ranges.len() == 1 {
             let r = &ranges[0];
@@ -255,7 +285,11 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
-    fn emit_is_word_char(&mut self, word_label: dynasmrt::DynamicLabel, not_word_label: dynasmrt::DynamicLabel) {
+    fn emit_is_word_char(
+        &mut self,
+        word_label: dynasmrt::DynamicLabel,
+        not_word_label: dynasmrt::DynamicLabel,
+    ) {
         use dynasmrt::DynasmLabelApi;
         dynasm!(self.asm
             ; .arch aarch64
@@ -274,7 +308,11 @@ impl TaggedNfaJitCompiler {
         );
     }
 
-    fn emit_word_boundary_check(&mut self, fail_label: dynasmrt::DynamicLabel, is_boundary: bool) -> Result<()> {
+    fn emit_word_boundary_check(
+        &mut self,
+        fail_label: dynasmrt::DynamicLabel,
+        is_boundary: bool,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         let prev_word = self.asm.new_dynamic_label();
         let prev_not_word = self.asm.new_dynamic_label();
@@ -415,7 +453,11 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
-    fn emit_codepoint_class_membership_check(&mut self, cpclass: &CodepointClass, fail_label: dynasmrt::DynamicLabel) -> Result<()> {
+    fn emit_codepoint_class_membership_check(
+        &mut self,
+        cpclass: &CodepointClass,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         let ascii_fast = self.asm.new_dynamic_label();
         let check_done = self.asm.new_dynamic_label();
@@ -512,7 +554,11 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
-    fn emit_codepoint_class_check(&mut self, cpclass: &CodepointClass, fail_label: dynasmrt::DynamicLabel) -> Result<()> {
+    fn emit_codepoint_class_check(
+        &mut self,
+        cpclass: &CodepointClass,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         let fail_stack = self.asm.new_dynamic_label();
         self.emit_utf8_decode(fail_label)?;
@@ -531,7 +577,11 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
-    fn emit_greedy_codepoint_plus(&mut self, cpclass: &CodepointClass, fail_label: dynasmrt::DynamicLabel) -> Result<()> {
+    fn emit_greedy_codepoint_plus(
+        &mut self,
+        cpclass: &CodepointClass,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         let loop_start = self.asm.new_dynamic_label();
         let loop_done = self.asm.new_dynamic_label();
@@ -564,7 +614,12 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
-    fn emit_non_greedy_suffix_check(&mut self, suffix: &PatternStep, fail_label: dynasmrt::DynamicLabel, _success: dynasmrt::DynamicLabel) -> Result<()> {
+    fn emit_non_greedy_suffix_check(
+        &mut self,
+        suffix: &PatternStep,
+        fail_label: dynasmrt::DynamicLabel,
+        _success: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         match suffix {
             PatternStep::Byte(b) => {
@@ -583,12 +638,21 @@ impl TaggedNfaJitCompiler {
                 self.emit_range_check(&bc.ranges, fail_label)?;
                 dynasm!(self.asm ; .arch aarch64 ; add x22, x22, 1);
             }
-            _ => return Err(Error::new(ErrorKind::Jit("Unsupported suffix".to_string()), "")),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Jit("Unsupported suffix".to_string()),
+                    "",
+                ))
+            }
         }
         Ok(())
     }
 
-    fn emit_step_inline(&mut self, step: &PatternStep, fail_label: dynasmrt::DynamicLabel) -> Result<()> {
+    fn emit_step_inline(
+        &mut self,
+        step: &PatternStep,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         match step {
             PatternStep::Byte(b) => {
@@ -625,12 +689,20 @@ impl TaggedNfaJitCompiler {
                 self.emit_range_check(&bc.ranges, ld)?;
                 dynasm!(self.asm ; .arch aarch64 ; add x22, x22, 1 ; b =>ls ; =>ld);
             }
-            PatternStep::CodepointClass(cp, _) => self.emit_codepoint_class_check(cp, fail_label)?,
-            PatternStep::GreedyCodepointPlus(cp) => self.emit_greedy_codepoint_plus(cp, fail_label)?,
+            PatternStep::CodepointClass(cp, _) => {
+                self.emit_codepoint_class_check(cp, fail_label)?
+            }
+            PatternStep::GreedyCodepointPlus(cp) => {
+                self.emit_greedy_codepoint_plus(cp, fail_label)?
+            }
             PatternStep::WordBoundary => self.emit_word_boundary_check(fail_label, true)?,
             PatternStep::NotWordBoundary => self.emit_word_boundary_check(fail_label, false)?,
-            PatternStep::StartOfText => { dynasm!(self.asm ; .arch aarch64 ; cbnz x22, =>fail_label); }
-            PatternStep::EndOfText => { dynasm!(self.asm ; .arch aarch64 ; cmp x22, x20 ; b.ne =>fail_label); }
+            PatternStep::StartOfText => {
+                dynasm!(self.asm ; .arch aarch64 ; cbnz x22, =>fail_label);
+            }
+            PatternStep::EndOfText => {
+                dynasm!(self.asm ; .arch aarch64 ; cmp x22, x20 ; b.ne =>fail_label);
+            }
             PatternStep::StartOfLine => {
                 let at_start = self.asm.new_dynamic_label();
                 dynasm!(self.asm
@@ -667,15 +739,25 @@ impl TaggedNfaJitCompiler {
                 }
                 dynasm!(self.asm ; .arch aarch64 ; =>success);
             }
-            _ => return Err(Error::new(ErrorKind::Jit(format!("Unsupported step: {:?}", step)), "")),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Jit(format!("Unsupported step: {:?}", step)),
+                    "",
+                ))
+            }
         }
         Ok(())
     }
 
-    fn emit_standalone_lookahead(&mut self, inner: &[PatternStep], fail_label: dynasmrt::DynamicLabel, positive: bool) -> Result<()> {
+    fn emit_standalone_lookahead(
+        &mut self,
+        inner: &[PatternStep],
+        fail_label: dynasmrt::DynamicLabel,
+        positive: bool,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         let inner_match = self.asm.new_dynamic_label();
-        dynasm!(self.asm ; .arch aarch64 ; mov x9, x22);  // Save position
+        dynasm!(self.asm ; .arch aarch64 ; mov x9, x22); // Save position
 
         for step in inner {
             match step {
@@ -704,7 +786,12 @@ impl TaggedNfaJitCompiler {
                         dynasm!(self.asm ; .arch aarch64 ; cmp x9, x20 ; b.ne =>inner_match);
                     }
                 }
-                _ => return Err(Error::new(ErrorKind::Jit("Complex lookahead".to_string()), "")),
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::Jit("Complex lookahead".to_string()),
+                        "",
+                    ))
+                }
             }
         }
 
@@ -715,7 +802,13 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
-    fn emit_lookbehind_check(&mut self, inner: &[PatternStep], min_len: usize, fail_label: dynasmrt::DynamicLabel, positive: bool) -> Result<()> {
+    fn emit_lookbehind_check(
+        &mut self,
+        inner: &[PatternStep],
+        min_len: usize,
+        fail_label: dynasmrt::DynamicLabel,
+        positive: bool,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         let inner_match = self.asm.new_dynamic_label();
         let inner_mismatch = self.asm.new_dynamic_label();
@@ -737,7 +830,12 @@ impl TaggedNfaJitCompiler {
                     self.emit_range_check(&bc.ranges, inner_mismatch)?;
                     dynasm!(self.asm ; .arch aarch64 ; add x22, x22, 1);
                 }
-                _ => return Err(Error::new(ErrorKind::Jit("Unsupported lookbehind step".to_string()), "")),
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::Jit("Unsupported lookbehind step".to_string()),
+                        "",
+                    ))
+                }
             }
         }
         dynasm!(self.asm ; .arch aarch64 ; b =>inner_match);
@@ -757,10 +855,14 @@ impl TaggedNfaJitCompiler {
         use dynasmrt::DynasmLabelApi;
         let steps = self.extract_pattern_steps();
         let steps = Self::combine_greedy_with_lookahead(steps);
-        if steps.is_empty() { return self.compile_with_fallback(None); }
+        if steps.is_empty() {
+            return self.compile_with_fallback(None);
+        }
         for step in &steps {
             if let PatternStep::Alt(alts) = step {
-                if Self::has_unsupported_in_alt(alts) { return self.compile_with_fallback(Some(steps)); }
+                if Self::has_unsupported_in_alt(alts) {
+                    return self.compile_with_fallback(Some(steps));
+                }
             }
         }
         let has_backrefs = Self::has_backref(&steps);
@@ -820,7 +922,11 @@ impl TaggedNfaJitCompiler {
                     let remaining = &steps[si + 1..];
                     let needs_bt = remaining.iter().any(|s| Self::step_consumes_input(s));
                     if needs_bt {
-                        self.emit_greedy_plus_with_backtracking(&bc.ranges, remaining, byte_mismatch)?;
+                        self.emit_greedy_plus_with_backtracking(
+                            &bc.ranges,
+                            remaining,
+                            byte_mismatch,
+                        )?;
                         break;
                     } else {
                         let ls = self.asm.new_dynamic_label();
@@ -836,7 +942,11 @@ impl TaggedNfaJitCompiler {
                     let remaining = &steps[si + 1..];
                     let needs_bt = remaining.iter().any(|s| Self::step_consumes_input(s));
                     if needs_bt {
-                        self.emit_greedy_star_with_backtracking(&bc.ranges, remaining, byte_mismatch)?;
+                        self.emit_greedy_star_with_backtracking(
+                            &bc.ranges,
+                            remaining,
+                            byte_mismatch,
+                        )?;
                         break;
                     } else {
                         let ls = self.asm.new_dynamic_label();
@@ -847,21 +957,33 @@ impl TaggedNfaJitCompiler {
                     }
                 }
                 PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_) => {}
-                PatternStep::CodepointClass(cp, _) => self.emit_codepoint_class_check(cp, byte_mismatch)?,
+                PatternStep::CodepointClass(cp, _) => {
+                    self.emit_codepoint_class_check(cp, byte_mismatch)?
+                }
                 PatternStep::GreedyCodepointPlus(cp) => {
                     let remaining = &steps[si + 1..];
                     let needs_bt = remaining.iter().any(|s| Self::step_consumes_input(s));
                     if needs_bt {
-                        self.emit_greedy_codepoint_plus_with_backtracking(cp, remaining, byte_mismatch)?;
+                        self.emit_greedy_codepoint_plus_with_backtracking(
+                            cp,
+                            remaining,
+                            byte_mismatch,
+                        )?;
                         break;
                     } else {
                         self.emit_greedy_codepoint_plus(cp, byte_mismatch)?;
                     }
                 }
                 PatternStep::WordBoundary => self.emit_word_boundary_check(byte_mismatch, true)?,
-                PatternStep::NotWordBoundary => self.emit_word_boundary_check(byte_mismatch, false)?,
-                PatternStep::StartOfText => { dynasm!(self.asm ; .arch aarch64 ; cbnz x22, =>byte_mismatch); }
-                PatternStep::EndOfText => { dynasm!(self.asm ; .arch aarch64 ; cmp x22, x20 ; b.ne =>byte_mismatch); }
+                PatternStep::NotWordBoundary => {
+                    self.emit_word_boundary_check(byte_mismatch, false)?
+                }
+                PatternStep::StartOfText => {
+                    dynasm!(self.asm ; .arch aarch64 ; cbnz x22, =>byte_mismatch);
+                }
+                PatternStep::EndOfText => {
+                    dynasm!(self.asm ; .arch aarch64 ; cmp x22, x20 ; b.ne =>byte_mismatch);
+                }
                 PatternStep::StartOfLine => {
                     let at_start = self.asm.new_dynamic_label();
                     dynasm!(self.asm ; .arch aarch64 ; cbz x22, =>at_start ; sub x1, x22, 1 ; ldrb w0, [x19, x1] ; cmp w0, 0x0A ; b.ne =>byte_mismatch ; =>at_start);
@@ -870,20 +992,38 @@ impl TaggedNfaJitCompiler {
                     let at_end = self.asm.new_dynamic_label();
                     dynasm!(self.asm ; .arch aarch64 ; cmp x22, x20 ; b.eq =>at_end ; ldrb w0, [x19, x22] ; cmp w0, 0x0A ; b.ne =>byte_mismatch ; =>at_end);
                 }
-                PatternStep::PositiveLookahead(inner) => self.emit_standalone_lookahead(inner, byte_mismatch, true)?,
-                PatternStep::NegativeLookahead(inner) => self.emit_standalone_lookahead(inner, byte_mismatch, false)?,
-                PatternStep::PositiveLookbehind(inner, ml) => self.emit_lookbehind_check(inner, *ml, byte_mismatch, true)?,
-                PatternStep::NegativeLookbehind(inner, ml) => self.emit_lookbehind_check(inner, *ml, byte_mismatch, false)?,
+                PatternStep::PositiveLookahead(inner) => {
+                    self.emit_standalone_lookahead(inner, byte_mismatch, true)?
+                }
+                PatternStep::NegativeLookahead(inner) => {
+                    self.emit_standalone_lookahead(inner, byte_mismatch, false)?
+                }
+                PatternStep::PositiveLookbehind(inner, ml) => {
+                    self.emit_lookbehind_check(inner, *ml, byte_mismatch, true)?
+                }
+                PatternStep::NegativeLookbehind(inner, ml) => {
+                    self.emit_lookbehind_check(inner, *ml, byte_mismatch, false)?
+                }
                 PatternStep::Alt(alts) => {
-                    if Self::has_unsupported_in_alt(alts) { return self.compile_with_fallback(Some(steps.clone())); }
+                    if Self::has_unsupported_in_alt(alts) {
+                        return self.compile_with_fallback(Some(steps.clone()));
+                    }
                     let alt_success = self.asm.new_dynamic_label();
                     dynasm!(self.asm ; .arch aarch64 ; mov x23, x22);
                     for (ai, alt_steps) in alts.iter().enumerate() {
                         let is_last = ai == alts.len() - 1;
-                        let try_next = if is_last { byte_mismatch } else { self.asm.new_dynamic_label() };
-                        for s in alt_steps { self.emit_alt_step(s, try_next)?; }
+                        let try_next = if is_last {
+                            byte_mismatch
+                        } else {
+                            self.asm.new_dynamic_label()
+                        };
+                        for s in alt_steps {
+                            self.emit_alt_step(s, try_next)?;
+                        }
                         dynasm!(self.asm ; .arch aarch64 ; b =>alt_success);
-                        if !is_last { dynasm!(self.asm ; .arch aarch64 ; =>try_next ; mov x22, x23); }
+                        if !is_last {
+                            dynasm!(self.asm ; .arch aarch64 ; =>try_next ; mov x22, x23);
+                        }
                     }
                     dynasm!(self.asm ; .arch aarch64 ; =>alt_success);
                 }
@@ -919,8 +1059,12 @@ impl TaggedNfaJitCompiler {
                     self.emit_range_check(&bc.ranges, byte_mismatch)?;
                     dynasm!(self.asm ; .arch aarch64 ; add x22, x22, 1 ; b =>try_suf ; =>matched);
                 }
-                PatternStep::GreedyPlusLookahead(bc, la, pos) => self.emit_greedy_plus_with_lookahead(&bc.ranges, la, *pos, byte_mismatch)?,
-                PatternStep::GreedyStarLookahead(bc, la, pos) => self.emit_greedy_star_with_lookahead(&bc.ranges, la, *pos, byte_mismatch)?,
+                PatternStep::GreedyPlusLookahead(bc, la, pos) => {
+                    self.emit_greedy_plus_with_lookahead(&bc.ranges, la, *pos, byte_mismatch)?
+                }
+                PatternStep::GreedyStarLookahead(bc, la, pos) => {
+                    self.emit_greedy_star_with_lookahead(&bc.ranges, la, *pos, byte_mismatch)?
+                }
                 PatternStep::Backref(_) => unreachable!("Backref handled above"),
             }
         }
@@ -949,8 +1093,12 @@ impl TaggedNfaJitCompiler {
             ; ret
         );
 
-        let has_captures = steps.iter().any(|s| matches!(s, PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_)));
-        let caps_off = if has_captures { self.emit_captures_fn(&steps)? } else {
+        let has_captures = steps
+            .iter()
+            .any(|s| matches!(s, PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_)));
+        let caps_off = if has_captures {
+            self.emit_captures_fn(&steps)?
+        } else {
             let off = self.asm.offset();
             dynasm!(self.asm ; .arch aarch64 ; movn x0, 1 ; ret);
             off
@@ -959,11 +1107,20 @@ impl TaggedNfaJitCompiler {
         self.finalize(find_offset, caps_off, false, Some(steps))
     }
 
-    fn emit_alt_step(&mut self, step: &PatternStep, fail_label: dynasmrt::DynamicLabel) -> Result<()> {
+    fn emit_alt_step(
+        &mut self,
+        step: &PatternStep,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
         self.emit_step_inline(step, fail_label)
     }
 
-    fn emit_greedy_plus_with_backtracking(&mut self, ranges: &[ByteRange], remaining: &[PatternStep], fail_label: dynasmrt::DynamicLabel) -> Result<()> {
+    fn emit_greedy_plus_with_backtracking(
+        &mut self,
+        ranges: &[ByteRange],
+        remaining: &[PatternStep],
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         let greedy_loop = self.asm.new_dynamic_label();
         let greedy_done = self.asm.new_dynamic_label();
@@ -977,7 +1134,9 @@ impl TaggedNfaJitCompiler {
         dynasm!(self.asm ; .arch aarch64 ; =>greedy_loop ; cmp x22, x20 ; b.ge =>greedy_done ; ldrb w0, [x19, x22]);
         self.emit_range_check(ranges, greedy_done)?;
         dynasm!(self.asm ; .arch aarch64 ; add x22, x22, 1 ; b =>greedy_loop ; =>greedy_done ; =>try_remaining);
-        for s in remaining { self.emit_step_inline(s, backtrack)?; }
+        for s in remaining {
+            self.emit_step_inline(s, backtrack)?;
+        }
         dynasm!(self.asm
             ; .arch aarch64
             ; b =>success
@@ -987,7 +1146,12 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
-    fn emit_greedy_star_with_backtracking(&mut self, ranges: &[ByteRange], remaining: &[PatternStep], fail_label: dynasmrt::DynamicLabel) -> Result<()> {
+    fn emit_greedy_star_with_backtracking(
+        &mut self,
+        ranges: &[ByteRange],
+        remaining: &[PatternStep],
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         let greedy_loop = self.asm.new_dynamic_label();
         let greedy_done = self.asm.new_dynamic_label();
@@ -999,7 +1163,9 @@ impl TaggedNfaJitCompiler {
         dynasm!(self.asm ; .arch aarch64 ; =>greedy_loop ; cmp x22, x20 ; b.ge =>greedy_done ; ldrb w0, [x19, x22]);
         self.emit_range_check(ranges, greedy_done)?;
         dynasm!(self.asm ; .arch aarch64 ; add x22, x22, 1 ; b =>greedy_loop ; =>greedy_done ; =>try_remaining);
-        for s in remaining { self.emit_step_inline(s, backtrack)?; }
+        for s in remaining {
+            self.emit_step_inline(s, backtrack)?;
+        }
         dynasm!(self.asm
             ; .arch aarch64
             ; b =>success
@@ -1009,14 +1175,125 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
-    fn emit_greedy_codepoint_plus_with_backtracking(&mut self, cpclass: &CodepointClass, remaining: &[PatternStep], fail_label: dynasmrt::DynamicLabel) -> Result<()> {
-        // Simplified: use normal greedy then try remaining
-        self.emit_greedy_codepoint_plus(cpclass, fail_label)?;
-        for s in remaining { self.emit_step_inline(s, fail_label)?; }
+    fn emit_greedy_codepoint_plus_with_backtracking(
+        &mut self,
+        cpclass: &CodepointClass,
+        remaining: &[PatternStep],
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
+        use dynasmrt::DynasmLabelApi;
+
+        // For codepoint backtracking, we save character boundaries on the stack
+        let loop_start = self.asm.new_dynamic_label();
+        let loop_done = self.asm.new_dynamic_label();
+        let try_remaining = self.asm.new_dynamic_label();
+        let backtrack = self.asm.new_dynamic_label();
+        let success = self.asm.new_dynamic_label();
+        let first_fail_stack = self.asm.new_dynamic_label();
+        let loop_fail_no_stack = self.asm.new_dynamic_label();
+        let loop_fail_stack = self.asm.new_dynamic_label();
+        let no_more_boundaries = self.asm.new_dynamic_label();
+
+        // x24 will track the number of saved boundaries on stack
+        dynasm!(self.asm
+            ; .arch aarch64
+            ; mov x24, xzr                    // x24 = boundary count = 0
+        );
+
+        // First iteration: must match at least one codepoint
+        self.emit_utf8_decode(fail_label)?;
+        dynasm!(self.asm
+            ; .arch aarch64
+            ; str x1, [sp, -16]!              // Save byte length
+        );
+        self.emit_codepoint_class_membership_check(cpclass, first_fail_stack)?;
+        dynasm!(self.asm
+            ; .arch aarch64
+            ; ldr x1, [sp], 16                // Restore byte length
+            ; add x22, x22, x1                // Advance position
+            ; str x22, [sp, -16]!             // Save boundary position
+            ; add x24, x24, 1                 // boundary count++
+
+            // Greedy loop: match more codepoints
+            ; =>loop_start
+        );
+
+        self.emit_utf8_decode(loop_fail_no_stack)?;
+        dynasm!(self.asm
+            ; .arch aarch64
+            ; str x1, [sp, -16]!              // Save byte length
+        );
+        self.emit_codepoint_class_membership_check(cpclass, loop_fail_stack)?;
+        dynasm!(self.asm
+            ; .arch aarch64
+            ; ldr x1, [sp], 16                // Restore byte length
+            ; add x22, x22, x1                // Advance position
+            ; str x22, [sp, -16]!             // Save boundary position
+            ; add x24, x24, 1                 // boundary count++
+            ; b =>loop_start
+
+            ; =>first_fail_stack
+            ; add sp, sp, 16                  // Pop saved byte length
+            ; b =>fail_label                  // First match failed - overall fail
+
+            ; =>loop_fail_no_stack
+            ; b =>loop_done
+
+            ; =>loop_fail_stack
+            ; add sp, sp, 16                  // Pop saved byte length
+            ; b =>loop_done
+
+            ; =>loop_done
+            // Greedy matching done
+            // Stack has boundary positions, x24 = count
+            // Try remaining steps with backtracking
+
+            ; =>try_remaining
+        );
+
+        // Emit code for remaining steps
+        for step in remaining {
+            self.emit_step_inline(step, backtrack)?;
+        }
+
+        // All remaining steps matched - success!
+        // Clean up stack (pop all saved boundaries)
+        dynasm!(self.asm
+            ; .arch aarch64
+            ; =>success
+            ; lsl x0, x24, 4                  // x0 = boundary_count * 16 (stack slot size)
+            ; add sp, sp, x0                  // Pop all boundary positions
+            ; b >done
+
+            ; =>backtrack
+            // Remaining steps failed - backtrack to previous boundary
+            ; cmp x24, 1
+            ; b.le =>no_more_boundaries       // Need at least 1 match (plus semantics)
+
+            ; ldr x22, [sp], 16               // Pop and discard current boundary
+            ; sub x24, x24, 1
+            ; ldr x22, [sp]                   // Peek previous boundary (don't pop yet)
+            ; b =>try_remaining
+
+            ; =>no_more_boundaries
+            // Can't backtrack more - clean up and fail
+            ; lsl x0, x24, 4                  // x0 = boundary_count * 16
+            ; add sp, sp, x0                  // Pop all remaining boundaries
+            ; b =>fail_label
+
+            ; done:
+        );
+
         Ok(())
     }
 
-    fn emit_greedy_plus_with_lookahead(&mut self, ranges: &[ByteRange], la_steps: &[PatternStep], positive: bool, fail_label: dynasmrt::DynamicLabel) -> Result<()> {
+    fn emit_greedy_plus_with_lookahead(
+        &mut self,
+        ranges: &[ByteRange],
+        la_steps: &[PatternStep],
+        positive: bool,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         let greedy_loop = self.asm.new_dynamic_label();
         let greedy_done = self.asm.new_dynamic_label();
@@ -1043,7 +1320,9 @@ impl TaggedNfaJitCompiler {
                     self.emit_range_check(&bc.ranges, la_mismatch)?;
                     dynasm!(self.asm ; .arch aarch64 ; add x22, x22, 1);
                 }
-                PatternStep::EndOfText => { dynasm!(self.asm ; .arch aarch64 ; cmp x22, x20 ; b.ne =>la_mismatch); }
+                PatternStep::EndOfText => {
+                    dynasm!(self.asm ; .arch aarch64 ; cmp x22, x20 ; b.ne =>la_mismatch);
+                }
                 _ => {}
             }
         }
@@ -1057,7 +1336,13 @@ impl TaggedNfaJitCompiler {
         Ok(())
     }
 
-    fn emit_greedy_star_with_lookahead(&mut self, ranges: &[ByteRange], la_steps: &[PatternStep], positive: bool, fail_label: dynasmrt::DynamicLabel) -> Result<()> {
+    fn emit_greedy_star_with_lookahead(
+        &mut self,
+        ranges: &[ByteRange],
+        la_steps: &[PatternStep],
+        positive: bool,
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         let greedy_loop = self.asm.new_dynamic_label();
         let greedy_done = self.asm.new_dynamic_label();
@@ -1082,7 +1367,9 @@ impl TaggedNfaJitCompiler {
                     self.emit_range_check(&bc.ranges, la_mismatch)?;
                     dynasm!(self.asm ; .arch aarch64 ; add x22, x22, 1);
                 }
-                PatternStep::EndOfText => { dynasm!(self.asm ; .arch aarch64 ; cmp x22, x20 ; b.ne =>la_mismatch); }
+                PatternStep::EndOfText => {
+                    dynasm!(self.asm ; .arch aarch64 ; cmp x22, x20 ; b.ne =>la_mismatch);
+                }
                 _ => {}
             }
         }
@@ -1100,10 +1387,14 @@ impl TaggedNfaJitCompiler {
         use dynasmrt::DynasmLabelApi;
         let offset = self.asm.offset();
         let min_len = Self::calc_min_len(steps);
-        let max_cap_idx = steps.iter().filter_map(|s| match s {
-            PatternStep::CaptureStart(i) | PatternStep::CaptureEnd(i) => Some(*i),
-            _ => None,
-        }).max().unwrap_or(0);
+        let max_cap_idx = steps
+            .iter()
+            .filter_map(|s| match s {
+                PatternStep::CaptureStart(i) | PatternStep::CaptureEnd(i) => Some(*i),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
         let num_slots = (max_cap_idx as usize + 1) * 2;
 
         // Prologue: x0=input, x1=len, x2=ctx, x3=captures
@@ -1178,7 +1469,12 @@ impl TaggedNfaJitCompiler {
         Ok(offset)
     }
 
-    fn emit_capture_step(&mut self, step: &PatternStep, fail_label: dynasmrt::DynamicLabel, _num_slots: usize) -> Result<()> {
+    fn emit_capture_step(
+        &mut self,
+        step: &PatternStep,
+        fail_label: dynasmrt::DynamicLabel,
+        _num_slots: usize,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
         match step {
             PatternStep::Byte(b) => {
@@ -1219,24 +1515,48 @@ impl TaggedNfaJitCompiler {
                 dynasm!(self.asm ; .arch aarch64 ; str x22, [sp, -16]!);
                 for (ai, alt_steps) in alts.iter().enumerate() {
                     let is_last = ai == alts.len() - 1;
-                    let try_next = if is_last { alt_fail } else { self.asm.new_dynamic_label() };
-                    for s in alt_steps { self.emit_capture_step(s, try_next, _num_slots)?; }
+                    let try_next = if is_last {
+                        alt_fail
+                    } else {
+                        self.asm.new_dynamic_label()
+                    };
+                    for s in alt_steps {
+                        self.emit_capture_step(s, try_next, _num_slots)?;
+                    }
                     dynasm!(self.asm ; .arch aarch64 ; add sp, sp, 16 ; b =>success);
-                    if !is_last { dynasm!(self.asm ; .arch aarch64 ; =>try_next ; ldr x22, [sp]); }
+                    if !is_last {
+                        dynasm!(self.asm ; .arch aarch64 ; =>try_next ; ldr x22, [sp]);
+                    }
                 }
                 dynasm!(self.asm ; .arch aarch64 ; =>alt_fail ; add sp, sp, 16 ; b =>fail_label);
                 dynasm!(self.asm ; .arch aarch64 ; =>success);
             }
-            PatternStep::CodepointClass(cp, _) => self.emit_codepoint_class_check(cp, fail_label)?,
-            PatternStep::GreedyCodepointPlus(cp) => self.emit_greedy_codepoint_plus(cp, fail_label)?,
+            PatternStep::CodepointClass(cp, _) => {
+                self.emit_codepoint_class_check(cp, fail_label)?
+            }
+            PatternStep::GreedyCodepointPlus(cp) => {
+                self.emit_greedy_codepoint_plus(cp, fail_label)?
+            }
             PatternStep::WordBoundary => self.emit_word_boundary_check(fail_label, true)?,
             PatternStep::NotWordBoundary => self.emit_word_boundary_check(fail_label, false)?,
-            PatternStep::PositiveLookahead(inner) => self.emit_standalone_lookahead(inner, fail_label, true)?,
-            PatternStep::NegativeLookahead(inner) => self.emit_standalone_lookahead(inner, fail_label, false)?,
-            PatternStep::PositiveLookbehind(inner, ml) => self.emit_lookbehind_check(inner, *ml, fail_label, true)?,
-            PatternStep::NegativeLookbehind(inner, ml) => self.emit_lookbehind_check(inner, *ml, fail_label, false)?,
-            PatternStep::StartOfText => { dynasm!(self.asm ; .arch aarch64 ; cbnz x22, =>fail_label); }
-            PatternStep::EndOfText => { dynasm!(self.asm ; .arch aarch64 ; cmp x22, x20 ; b.ne =>fail_label); }
+            PatternStep::PositiveLookahead(inner) => {
+                self.emit_standalone_lookahead(inner, fail_label, true)?
+            }
+            PatternStep::NegativeLookahead(inner) => {
+                self.emit_standalone_lookahead(inner, fail_label, false)?
+            }
+            PatternStep::PositiveLookbehind(inner, ml) => {
+                self.emit_lookbehind_check(inner, *ml, fail_label, true)?
+            }
+            PatternStep::NegativeLookbehind(inner, ml) => {
+                self.emit_lookbehind_check(inner, *ml, fail_label, false)?
+            }
+            PatternStep::StartOfText => {
+                dynasm!(self.asm ; .arch aarch64 ; cbnz x22, =>fail_label);
+            }
+            PatternStep::EndOfText => {
+                dynasm!(self.asm ; .arch aarch64 ; cmp x22, x20 ; b.ne =>fail_label);
+            }
             PatternStep::StartOfLine => {
                 let at_start = self.asm.new_dynamic_label();
                 dynasm!(self.asm ; .arch aarch64 ; cbz x22, =>at_start ; sub x1, x22, 1 ; ldrb w0, [x19, x1] ; cmp w0, 0x0A ; b.ne =>fail_label ; =>at_start);
@@ -1308,8 +1628,12 @@ impl TaggedNfaJitCompiler {
                 self.emit_range_check(&bc.ranges, fail_label)?;
                 dynasm!(self.asm ; .arch aarch64 ; add x22, x22, 1 ; b =>try_suf ; =>matched);
             }
-            PatternStep::GreedyPlusLookahead(bc, la, pos) => self.emit_greedy_plus_with_lookahead(&bc.ranges, la, *pos, fail_label)?,
-            PatternStep::GreedyStarLookahead(bc, la, pos) => self.emit_greedy_star_with_lookahead(&bc.ranges, la, *pos, fail_label)?,
+            PatternStep::GreedyPlusLookahead(bc, la, pos) => {
+                self.emit_greedy_plus_with_lookahead(&bc.ranges, la, *pos, fail_label)?
+            }
+            PatternStep::GreedyStarLookahead(bc, la, pos) => {
+                self.emit_greedy_star_with_lookahead(&bc.ranges, la, *pos, fail_label)?
+            }
         }
         Ok(())
     }
@@ -1319,11 +1643,20 @@ impl TaggedNfaJitCompiler {
         self.extract_from_state(self.nfa.start, &mut visited, None)
     }
 
-    fn extract_from_state(&self, start: StateId, visited: &mut [bool], end_state: Option<StateId>) -> Vec<PatternStep> {
+    fn extract_from_state(
+        &self,
+        start: StateId,
+        visited: &mut [bool],
+        end_state: Option<StateId>,
+    ) -> Vec<PatternStep> {
         let mut steps = Vec::new();
         let mut current = start;
         loop {
-            if let Some(end) = end_state { if current == end { break; } }
+            if let Some(end) = end_state {
+                if current == end {
+                    break;
+                }
+            }
             let state = &self.nfa.states[current as usize];
             if let Some(ref instr) = state.instruction {
                 match instr {
@@ -1335,43 +1668,61 @@ impl TaggedNfaJitCompiler {
                             let (e0, e1) = (ts.epsilon[0], ts.epsilon[1]);
                             if e0 == current {
                                 steps.push(PatternStep::GreedyCodepointPlus(cp.clone()));
-                                visited[current as usize] = true; visited[*t as usize] = true;
-                                current = e1; continue;
+                                visited[current as usize] = true;
+                                visited[*t as usize] = true;
+                                current = e1;
+                                continue;
                             } else if e1 == current {
                                 steps.push(PatternStep::GreedyCodepointPlus(cp.clone()));
-                                visited[current as usize] = true; visited[*t as usize] = true;
-                                current = e0; continue;
+                                visited[current as usize] = true;
+                                visited[*t as usize] = true;
+                                current = e0;
+                                continue;
                             }
                         }
                         steps.push(PatternStep::CodepointClass(cp.clone(), *t));
-                        current = *t; continue;
+                        current = *t;
+                        continue;
                     }
                     NfaInstruction::Backref(i) => {
                         steps.push(PatternStep::Backref(*i));
                         if state.epsilon.len() == 1 {
-                            visited[current as usize] = true; current = state.epsilon[0]; continue;
-                        } else if state.epsilon.is_empty() && state.is_match { break; }
-                        else { return Vec::new(); }
+                            visited[current as usize] = true;
+                            current = state.epsilon[0];
+                            continue;
+                        } else if state.epsilon.is_empty() && state.is_match {
+                            break;
+                        } else {
+                            return Vec::new();
+                        }
                     }
                     NfaInstruction::PositiveLookahead(inner) => {
                         let inner_steps = self.extract_lookaround_steps(inner);
-                        if inner_steps.is_empty() { return Vec::new(); }
+                        if inner_steps.is_empty() {
+                            return Vec::new();
+                        }
                         steps.push(PatternStep::PositiveLookahead(inner_steps));
                     }
                     NfaInstruction::NegativeLookahead(inner) => {
                         let inner_steps = self.extract_lookaround_steps(inner);
-                        if inner_steps.is_empty() { return Vec::new(); }
+                        if inner_steps.is_empty() {
+                            return Vec::new();
+                        }
                         steps.push(PatternStep::NegativeLookahead(inner_steps));
                     }
                     NfaInstruction::PositiveLookbehind(inner) => {
                         let inner_steps = self.extract_lookaround_steps(inner);
-                        if inner_steps.is_empty() { return Vec::new(); }
+                        if inner_steps.is_empty() {
+                            return Vec::new();
+                        }
                         let ml = Self::calc_min_len(&inner_steps);
                         steps.push(PatternStep::PositiveLookbehind(inner_steps, ml));
                     }
                     NfaInstruction::NegativeLookbehind(inner) => {
                         let inner_steps = self.extract_lookaround_steps(inner);
-                        if inner_steps.is_empty() { return Vec::new(); }
+                        if inner_steps.is_empty() {
+                            return Vec::new();
+                        }
                         let ml = Self::calc_min_len(&inner_steps);
                         steps.push(PatternStep::NegativeLookbehind(inner_steps, ml));
                     }
@@ -1384,59 +1735,92 @@ impl TaggedNfaJitCompiler {
                     NfaInstruction::NonGreedyExit => {}
                 }
             }
-            if state.is_match { break; }
+            if state.is_match {
+                break;
+            }
             if !state.transitions.is_empty() {
                 let target = state.transitions[0].1;
-                if !state.transitions.iter().all(|(_, t)| *t == target) { return Vec::new(); }
-                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                if !state.transitions.iter().all(|(_, t)| *t == target) {
+                    return Vec::new();
+                }
+                let ranges: Vec<ByteRange> =
+                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
                 let ts = &self.nfa.states[target as usize];
                 if ts.epsilon.len() == 2 && ts.transitions.is_empty() {
                     let (e0, e1) = (ts.epsilon[0], ts.epsilon[1]);
                     if e0 == current {
                         steps.push(PatternStep::GreedyPlus(ByteClass::new(ranges)));
-                        current = e1; visited[target as usize] = true; continue;
+                        current = e1;
+                        visited[target as usize] = true;
+                        continue;
                     }
                     let ms = &self.nfa.states[e0 as usize];
-                    if e1 == current && ms.transitions.is_empty() && ms.epsilon.len() == 1 && matches!(ms.instruction, Some(NfaInstruction::NonGreedyExit)) {
+                    if e1 == current
+                        && ms.transitions.is_empty()
+                        && ms.epsilon.len() == 1
+                        && matches!(ms.instruction, Some(NfaInstruction::NonGreedyExit))
+                    {
                         let exit = ms.epsilon[0];
                         if let Some(suf) = self.extract_single_step(exit) {
-                            steps.push(PatternStep::NonGreedyPlus(ByteClass::new(ranges), Box::new(suf)));
-                            visited[target as usize] = true; visited[e0 as usize] = true; visited[exit as usize] = true;
-                            current = self.advance_past_step(exit); continue;
+                            steps.push(PatternStep::NonGreedyPlus(
+                                ByteClass::new(ranges),
+                                Box::new(suf),
+                            ));
+                            visited[target as usize] = true;
+                            visited[e0 as usize] = true;
+                            visited[exit as usize] = true;
+                            current = self.advance_past_step(exit);
+                            continue;
                         }
                         return Vec::new();
                     }
                 }
-                if visited[current as usize] { return Vec::new(); }
+                if visited[current as usize] {
+                    return Vec::new();
+                }
                 visited[current as usize] = true;
                 if ranges.len() == 1 && ranges[0].start == ranges[0].end {
                     steps.push(PatternStep::Byte(ranges[0].start));
                 } else {
                     steps.push(PatternStep::ByteClass(ByteClass::new(ranges)));
                 }
-                current = target; continue;
+                current = target;
+                continue;
             }
             if state.epsilon.len() == 1 && state.transitions.is_empty() {
-                if visited[current as usize] { return Vec::new(); }
+                if visited[current as usize] {
+                    return Vec::new();
+                }
                 visited[current as usize] = true;
-                current = state.epsilon[0]; continue;
+                current = state.epsilon[0];
+                continue;
             }
             if state.epsilon.len() > 1 && state.transitions.is_empty() {
                 if state.epsilon.len() == 2 {
                     let e0s = &self.nfa.states[state.epsilon[0] as usize];
-                    if e0s.transitions.is_empty() && e0s.epsilon.len() == 1 && matches!(e0s.instruction, Some(NfaInstruction::NonGreedyExit)) {
+                    if e0s.transitions.is_empty()
+                        && e0s.epsilon.len() == 1
+                        && matches!(e0s.instruction, Some(NfaInstruction::NonGreedyExit))
+                    {
                         let ps = state.epsilon[1];
                         let pst = &self.nfa.states[ps as usize];
                         if !pst.transitions.is_empty() {
                             let t = pst.transitions[0].1;
                             if pst.transitions.iter().all(|(_, tt)| *tt == t) {
-                                let ranges: Vec<ByteRange> = pst.transitions.iter().map(|(r, _)| r.clone()).collect();
+                                let ranges: Vec<ByteRange> =
+                                    pst.transitions.iter().map(|(r, _)| r.clone()).collect();
                                 let exit = e0s.epsilon[0];
                                 if let Some(suf) = self.extract_single_step(exit) {
-                                    steps.push(PatternStep::NonGreedyStar(ByteClass::new(ranges), Box::new(suf)));
-                                    visited[current as usize] = true; visited[state.epsilon[0] as usize] = true;
-                                    visited[ps as usize] = true; visited[exit as usize] = true;
-                                    current = self.advance_past_step(exit); continue;
+                                    steps.push(PatternStep::NonGreedyStar(
+                                        ByteClass::new(ranges),
+                                        Box::new(suf),
+                                    ));
+                                    visited[current as usize] = true;
+                                    visited[state.epsilon[0] as usize] = true;
+                                    visited[ps as usize] = true;
+                                    visited[exit as usize] = true;
+                                    current = self.advance_past_step(exit);
+                                    continue;
                                 }
                             }
                         }
@@ -1444,20 +1828,27 @@ impl TaggedNfaJitCompiler {
                     }
                 }
                 let common_end = self.find_alternation_end(current);
-                if common_end.is_none() { return Vec::new(); }
+                if common_end.is_none() {
+                    return Vec::new();
+                }
                 let ce = common_end.unwrap();
                 let mut alts = Vec::new();
                 for &alt_start in &state.epsilon {
                     let mut av = visited.to_vec();
                     let alt_steps = self.extract_from_state(alt_start, &mut av, Some(ce));
-                    if alt_steps.is_empty() && !self.is_trivial_path(alt_start, ce) { return Vec::new(); }
+                    if alt_steps.is_empty() && !self.is_trivial_path(alt_start, ce) {
+                        return Vec::new();
+                    }
                     alts.push(alt_steps);
                 }
                 steps.push(PatternStep::Alt(alts));
                 visited[current as usize] = true;
-                current = ce; continue;
+                current = ce;
+                continue;
             }
-            if state.transitions.is_empty() && state.epsilon.is_empty() { break; }
+            if state.transitions.is_empty() && state.epsilon.is_empty() {
+                break;
+            }
             return Vec::new();
         }
         steps
@@ -1468,9 +1859,13 @@ impl TaggedNfaJitCompiler {
         let mut steps = Vec::new();
         let mut current = inner.start;
         loop {
-            if current as usize >= inner.states.len() { return Vec::new(); }
+            if current as usize >= inner.states.len() {
+                return Vec::new();
+            }
             let state = &inner.states[current as usize];
-            if state.is_match { break; }
+            if state.is_match {
+                break;
+            }
             if let Some(ref instr) = state.instruction {
                 match instr {
                     NfaInstruction::WordBoundary => steps.push(PatternStep::WordBoundary),
@@ -1481,70 +1876,120 @@ impl TaggedNfaJitCompiler {
             }
             if !state.transitions.is_empty() {
                 let t = state.transitions[0].1;
-                if !state.transitions.iter().all(|(_, tt)| *tt == t) { return Vec::new(); }
-                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                if !state.transitions.iter().all(|(_, tt)| *tt == t) {
+                    return Vec::new();
+                }
+                let ranges: Vec<ByteRange> =
+                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
                 let ts = &inner.states[t as usize];
                 if ts.transitions.is_empty() && ts.epsilon.len() == 2 {
                     let (e0, e1) = (ts.epsilon[0], ts.epsilon[1]);
                     if e0 == current {
                         steps.push(PatternStep::GreedyPlus(ByteClass::new(ranges)));
-                        if visited[t as usize] { return Vec::new(); }
-                        visited[t as usize] = true; current = e1; continue;
+                        if visited[t as usize] {
+                            return Vec::new();
+                        }
+                        visited[t as usize] = true;
+                        current = e1;
+                        continue;
                     } else if e1 == current {
                         steps.push(PatternStep::GreedyPlus(ByteClass::new(ranges)));
-                        if visited[t as usize] { return Vec::new(); }
-                        visited[t as usize] = true; current = e0; continue;
+                        if visited[t as usize] {
+                            return Vec::new();
+                        }
+                        visited[t as usize] = true;
+                        current = e0;
+                        continue;
                     }
                 }
-                if visited[current as usize] { return Vec::new(); }
+                if visited[current as usize] {
+                    return Vec::new();
+                }
                 visited[current as usize] = true;
                 if ranges.len() == 1 && ranges[0].start == ranges[0].end {
                     steps.push(PatternStep::Byte(ranges[0].start));
                 } else {
                     steps.push(PatternStep::ByteClass(ByteClass::new(ranges)));
                 }
-                current = t; continue;
+                current = t;
+                continue;
             }
             if state.epsilon.len() == 1 && state.transitions.is_empty() {
-                if visited[current as usize] { return Vec::new(); }
+                if visited[current as usize] {
+                    return Vec::new();
+                }
                 visited[current as usize] = true;
-                current = state.epsilon[0]; continue;
+                current = state.epsilon[0];
+                continue;
             }
             if state.epsilon.len() == 2 && state.transitions.is_empty() {
                 let (e0, e1) = (state.epsilon[0], state.epsilon[1]);
-                if let Some((r, exit)) = self.detect_greedy_star_lookaround(inner, current, e0, e1, &visited) {
+                if let Some((r, exit)) =
+                    self.detect_greedy_star_lookaround(inner, current, e0, e1, &visited)
+                {
                     steps.push(PatternStep::GreedyStar(ByteClass::new(r)));
-                    visited[current as usize] = true; current = exit; continue;
+                    visited[current as usize] = true;
+                    current = exit;
+                    continue;
                 }
-                if let Some((r, exit)) = self.detect_greedy_star_lookaround(inner, current, e1, e0, &visited) {
+                if let Some((r, exit)) =
+                    self.detect_greedy_star_lookaround(inner, current, e1, e0, &visited)
+                {
                     steps.push(PatternStep::GreedyStar(ByteClass::new(r)));
-                    visited[current as usize] = true; current = exit; continue;
+                    visited[current as usize] = true;
+                    current = exit;
+                    continue;
                 }
                 return Vec::new();
             }
-            if !state.epsilon.is_empty() || !state.transitions.is_empty() { return Vec::new(); }
+            if !state.epsilon.is_empty() || !state.transitions.is_empty() {
+                return Vec::new();
+            }
             break;
         }
         steps
     }
 
-    fn detect_greedy_star_lookaround(&self, inner: &Nfa, branch: StateId, loop_start: StateId, exit: StateId, visited: &[bool]) -> Option<(Vec<ByteRange>, StateId)> {
-        if loop_start as usize >= inner.states.len() { return None; }
+    fn detect_greedy_star_lookaround(
+        &self,
+        inner: &Nfa,
+        branch: StateId,
+        loop_start: StateId,
+        exit: StateId,
+        visited: &[bool],
+    ) -> Option<(Vec<ByteRange>, StateId)> {
+        if loop_start as usize >= inner.states.len() {
+            return None;
+        }
         let ls = &inner.states[loop_start as usize];
-        if ls.transitions.is_empty() { return None; }
+        if ls.transitions.is_empty() {
+            return None;
+        }
         let t = ls.transitions[0].1;
-        if !ls.transitions.iter().all(|(_, tt)| *tt == t) { return None; }
+        if !ls.transitions.iter().all(|(_, tt)| *tt == t) {
+            return None;
+        }
         let ranges: Vec<ByteRange> = ls.transitions.iter().map(|(r, _)| r.clone()).collect();
         let ts = &inner.states[t as usize];
         if ts.epsilon.len() == 1 {
             let back = ts.epsilon[0];
-            if (back == branch || back == loop_start) && !visited[loop_start as usize] { return Some((ranges, exit)); }
+            if (back == branch || back == loop_start) && !visited[loop_start as usize] {
+                return Some((ranges, exit));
+            }
         }
         if ts.epsilon.len() == 2 {
             let (e0, e1) = (ts.epsilon[0], ts.epsilon[1]);
-            let (back, fwd) = if e0 == branch || e0 == loop_start { (e0, e1) } else if e1 == branch || e1 == loop_start { (e1, e0) } else { return None; };
+            let (back, fwd) = if e0 == branch || e0 == loop_start {
+                (e0, e1)
+            } else if e1 == branch || e1 == loop_start {
+                (e1, e0)
+            } else {
+                return None;
+            };
             let _ = back;
-            if fwd == exit && !visited[loop_start as usize] { return Some((ranges, exit)); }
+            if fwd == exit && !visited[loop_start as usize] {
+                return Some((ranges, exit));
+            }
         }
         None
     }
@@ -1554,38 +1999,87 @@ impl TaggedNfaJitCompiler {
     }
 
     fn find_alternation_end_depth(&self, start: StateId, depth: usize) -> Option<StateId> {
-        if depth > 20 { return None; }
+        if depth > 20 {
+            return None;
+        }
         let state = &self.nfa.states[start as usize];
-        if state.epsilon.len() < 2 { return None; }
+        if state.epsilon.len() < 2 {
+            return None;
+        }
         let mut ends = Vec::new();
         for &alt_start in &state.epsilon {
-            if let Some(e) = self.trace_to_merge_depth(alt_start, start, depth) { ends.push(e); } else { return None; }
+            if let Some(e) = self.trace_to_merge_depth(alt_start, start, depth) {
+                ends.push(e);
+            } else {
+                return None;
+            }
         }
-        if ends.is_empty() { return None; }
+        if ends.is_empty() {
+            return None;
+        }
         let first = ends[0];
-        if ends.iter().all(|&e| e == first) { Some(first) } else { None }
+        if ends.iter().all(|&e| e == first) {
+            Some(first)
+        } else {
+            None
+        }
     }
 
-    fn trace_to_merge_depth(&self, start: StateId, alt_start: StateId, depth: usize) -> Option<StateId> {
-        if depth > 20 { return None; }
+    fn trace_to_merge_depth(
+        &self,
+        start: StateId,
+        alt_start: StateId,
+        depth: usize,
+    ) -> Option<StateId> {
+        if depth > 20 {
+            return None;
+        }
         let mut current = start;
         let mut visited = vec![false; self.nfa.states.len()];
         visited[alt_start as usize] = true;
         for _ in 0..200 {
-            if visited[current as usize] { return None; }
+            if visited[current as usize] {
+                return None;
+            }
             visited[current as usize] = true;
             let state = &self.nfa.states[current as usize];
-            if state.is_match { return Some(current); }
-            if let Some(NfaInstruction::CodepointClass(_, t)) = &state.instruction { current = *t; continue; }
-            if state.transitions.is_empty() && state.epsilon.is_empty() { return Some(current); }
-            if state.epsilon.len() == 1 && state.transitions.is_empty() { current = state.epsilon[0]; continue; }
-            if !state.transitions.is_empty() && state.epsilon.is_empty() { current = state.transitions[0].1; continue; }
-            if !state.transitions.is_empty() && state.epsilon.len() == 1 { current = state.transitions[0].1; continue; }
+            if state.is_match {
+                return Some(current);
+            }
+            if let Some(NfaInstruction::CodepointClass(_, t)) = &state.instruction {
+                current = *t;
+                continue;
+            }
+            if state.transitions.is_empty() && state.epsilon.is_empty() {
+                return Some(current);
+            }
+            if state.epsilon.len() == 1 && state.transitions.is_empty() {
+                current = state.epsilon[0];
+                continue;
+            }
+            if !state.transitions.is_empty() && state.epsilon.is_empty() {
+                current = state.transitions[0].1;
+                continue;
+            }
+            if !state.transitions.is_empty() && state.epsilon.len() == 1 {
+                current = state.transitions[0].1;
+                continue;
+            }
             if state.epsilon.len() >= 2 && state.transitions.is_empty() {
                 let mut fwd = Vec::new();
-                for &e in &state.epsilon { if !visited[e as usize] { fwd.push(e); } }
-                if fwd.len() == 1 { current = fwd[0]; continue; }
-                if let Some(ne) = self.find_alternation_end_depth(current, depth + 1) { current = ne; continue; }
+                for &e in &state.epsilon {
+                    if !visited[e as usize] {
+                        fwd.push(e);
+                    }
+                }
+                if fwd.len() == 1 {
+                    current = fwd[0];
+                    continue;
+                }
+                if let Some(ne) = self.find_alternation_end_depth(current, depth + 1) {
+                    current = ne;
+                    continue;
+                }
                 return None;
             }
             return None;
@@ -1598,11 +2092,16 @@ impl TaggedNfaJitCompiler {
     }
 
     fn is_trivial_path_depth(&self, start: StateId, end: StateId, depth: usize) -> bool {
-        if depth > 100 { return false; }
-        if start == end { return true; }
+        if depth > 100 {
+            return false;
+        }
+        if start == end {
+            return true;
+        }
         let state = &self.nfa.states[start as usize];
         if state.epsilon.len() == 1 && state.transitions.is_empty() {
-            return state.epsilon[0] == end || self.is_trivial_path_depth(state.epsilon[0], end, depth + 1);
+            return state.epsilon[0] == end
+                || self.is_trivial_path_depth(state.epsilon[0], end, depth + 1);
         }
         false
     }
@@ -1613,16 +2112,24 @@ impl TaggedNfaJitCompiler {
             let state = &self.nfa.states[current as usize];
             if !state.transitions.is_empty() {
                 let t = state.transitions[0].1;
-                if !state.transitions.iter().all(|(_, tt)| *tt == t) { return None; }
-                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                if !state.transitions.iter().all(|(_, tt)| *tt == t) {
+                    return None;
+                }
+                let ranges: Vec<ByteRange> =
+                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
                 return if ranges.len() == 1 && ranges[0].start == ranges[0].end {
                     Some(PatternStep::Byte(ranges[0].start))
                 } else {
                     Some(PatternStep::ByteClass(ByteClass::new(ranges)))
                 };
             }
-            if state.epsilon.len() == 1 && state.transitions.is_empty() { current = state.epsilon[0]; continue; }
-            if state.is_match || state.epsilon.len() > 1 { return None; }
+            if state.epsilon.len() == 1 && state.transitions.is_empty() {
+                current = state.epsilon[0];
+                continue;
+            }
+            if state.is_match || state.epsilon.len() > 1 {
+                return None;
+            }
             return None;
         }
     }
@@ -1631,20 +2138,50 @@ impl TaggedNfaJitCompiler {
         let mut current = state_id;
         loop {
             let state = &self.nfa.states[current as usize];
-            if !state.transitions.is_empty() { return state.transitions[0].1; }
-            if state.epsilon.len() == 1 { current = state.epsilon[0]; continue; }
+            if !state.transitions.is_empty() {
+                return state.transitions[0].1;
+            }
+            if state.epsilon.len() == 1 {
+                current = state.epsilon[0];
+                continue;
+            }
             return current;
         }
     }
 
-    fn finalize(self, find_offset: dynasmrt::AssemblyOffset, captures_offset: dynasmrt::AssemblyOffset, find_needs_ctx: bool, fallback_steps: Option<Vec<PatternStep>>) -> Result<TaggedNfaJit> {
-        let code = self.asm.finalize().map_err(|e| Error::new(ErrorKind::Jit(format!("Failed to finalize: {:?}", e)), ""))?;
-        let find_fn: extern "C" fn(*const u8, usize, *mut TaggedNfaContext) -> i64 = unsafe { std::mem::transmute(code.ptr(find_offset)) };
-        let captures_fn: extern "C" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64 = unsafe { std::mem::transmute(code.ptr(captures_offset)) };
+    fn finalize(
+        self,
+        find_offset: dynasmrt::AssemblyOffset,
+        captures_offset: dynasmrt::AssemblyOffset,
+        find_needs_ctx: bool,
+        fallback_steps: Option<Vec<PatternStep>>,
+    ) -> Result<TaggedNfaJit> {
+        let code = self
+            .asm
+            .finalize()
+            .map_err(|e| Error::new(ErrorKind::Jit(format!("Failed to finalize: {:?}", e)), ""))?;
+        let find_fn: extern "C" fn(*const u8, usize, *mut TaggedNfaContext) -> i64 =
+            unsafe { std::mem::transmute(code.ptr(find_offset)) };
+        let captures_fn: extern "C" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64 =
+            unsafe { std::mem::transmute(code.ptr(captures_offset)) };
         let capture_count = self.nfa.capture_count;
         let state_count = self.nfa.states.len();
         let lookaround_count = self.liveness.lookaround_count;
         let stride = (capture_count as usize + 1) * 2;
-        Ok(TaggedNfaJit::new(code, find_fn, captures_fn, self.liveness, self.nfa, capture_count, state_count, lookaround_count, stride, self.codepoint_classes, self.lookaround_nfas, find_needs_ctx, fallback_steps))
+        Ok(TaggedNfaJit::new(
+            code,
+            find_fn,
+            captures_fn,
+            self.liveness,
+            self.nfa,
+            capture_count,
+            state_count,
+            lookaround_count,
+            stride,
+            self.codepoint_classes,
+            self.lookaround_nfas,
+            find_needs_ctx,
+            fallback_steps,
+        ))
     }
 }
