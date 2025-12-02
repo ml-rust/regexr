@@ -182,12 +182,7 @@ mod integration_tests {
             // byte 0 is everywhere, so it will be found at position 0
             // all other bytes should be found at position 50
             let expected = if byte == 0 { 0 } else { 50 };
-            assert_eq!(
-                result,
-                Some(expected),
-                "Failed to find byte 0x{:02X}",
-                byte
-            );
+            assert_eq!(result, Some(expected), "Failed to find byte 0x{:02X}", byte);
         }
     }
 
@@ -204,9 +199,7 @@ mod integration_tests {
     #[test]
     fn test_teddy_max_patterns() {
         // Exactly MAX_PATTERNS should work
-        let patterns: Vec<Vec<u8>> = (0..MAX_PATTERNS)
-            .map(|i| vec![b'a' + i as u8])
-            .collect();
+        let patterns: Vec<Vec<u8>> = (0..MAX_PATTERNS).map(|i| vec![b'a' + i as u8]).collect();
         assert!(Teddy::new(patterns).is_some());
 
         // MAX_PATTERNS + 1 should fail

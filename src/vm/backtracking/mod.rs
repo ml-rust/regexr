@@ -15,9 +15,9 @@
 //! This is a traditional backtracking engine with explicit choice points.
 //! It supports backreferences which cannot be handled by NFA-based engines.
 
-pub(crate) mod shared;
 mod engine;
 pub mod interpreter;
+pub(crate) mod shared;
 
 #[cfg(all(feature = "jit", target_arch = "x86_64"))]
 pub mod jit;

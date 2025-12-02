@@ -100,7 +100,8 @@ pub unsafe extern "sysv64" fn check_codepoint_class(
         if (b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80 {
             return -1;
         }
-        let cp = ((first_byte as u32 & 0x0F) << 12) | ((b1 as u32 & 0x3F) << 6) | (b2 as u32 & 0x3F);
+        let cp =
+            ((first_byte as u32 & 0x0F) << 12) | ((b1 as u32 & 0x3F) << 6) | (b2 as u32 & 0x3F);
         (cp, 3)
     } else if first_byte < 0xF8 {
         // 4-byte sequence
@@ -113,8 +114,10 @@ pub unsafe extern "sysv64" fn check_codepoint_class(
         if (b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80 || (b3 & 0xC0) != 0x80 {
             return -1;
         }
-        let cp = ((first_byte as u32 & 0x07) << 18) | ((b1 as u32 & 0x3F) << 12)
-            | ((b2 as u32 & 0x3F) << 6) | (b3 as u32 & 0x3F);
+        let cp = ((first_byte as u32 & 0x07) << 18)
+            | ((b1 as u32 & 0x3F) << 12)
+            | ((b2 as u32 & 0x3F) << 6)
+            | (b3 as u32 & 0x3F);
         (cp, 4)
     } else {
         // Invalid UTF-8

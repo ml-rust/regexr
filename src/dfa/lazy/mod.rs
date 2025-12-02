@@ -27,9 +27,9 @@
 //! 4. **Full Flush Cache Strategy**: When cache is full, flush all states
 //!    rather than LRU (faster in practice).
 
-pub(crate) mod shared;
 mod engine;
 pub mod interpreter;
+pub(crate) mod shared;
 
 // Re-exports
 pub use engine::LazyDfaEngine;
@@ -124,8 +124,16 @@ mod tests {
         let mut dfa = make_dfa(r"\bthe\b");
         assert!(dfa.has_word_boundary(), "DFA should detect word boundary");
 
-        assert_eq!(dfa.find(b"the cat"), Some((0, 3)), "Should match 'the' at start");
-        assert_eq!(dfa.find(b"see the cat"), Some((4, 7)), "Should match 'the' in middle");
+        assert_eq!(
+            dfa.find(b"the cat"),
+            Some((0, 3)),
+            "Should match 'the' at start"
+        );
+        assert_eq!(
+            dfa.find(b"see the cat"),
+            Some((4, 7)),
+            "Should match 'the' in middle"
+        );
 
         assert_eq!(dfa.find(b"there"), None, "Should not match 'there'");
         assert_eq!(dfa.find(b"other"), None, "Should not match 'other'");
@@ -163,7 +171,11 @@ mod tests {
         assert!(dfa.has_anchors(), "DFA should detect anchors");
         assert!(dfa.has_start_anchor(), "DFA should detect start anchor");
 
-        assert_eq!(dfa.find(b"hello world"), Some((0, 5)), "Should match at start");
+        assert_eq!(
+            dfa.find(b"hello world"),
+            Some((0, 5)),
+            "Should match at start"
+        );
         assert_eq!(dfa.find(b"hello"), Some((0, 5)), "Should match exact");
 
         assert_eq!(dfa.find(b"say hello"), None, "Should not match in middle");
@@ -176,7 +188,11 @@ mod tests {
         assert!(dfa.has_anchors(), "DFA should detect anchors");
         assert!(dfa.has_end_anchor(), "DFA should detect end anchor");
 
-        assert_eq!(dfa.find(b"hello world"), Some((6, 11)), "Should match at end");
+        assert_eq!(
+            dfa.find(b"hello world"),
+            Some((6, 11)),
+            "Should match at end"
+        );
         assert_eq!(dfa.find(b"world"), Some((0, 5)), "Should match exact");
 
         assert_eq!(dfa.find(b"world hello"), None, "Should not match at start");
@@ -190,7 +206,11 @@ mod tests {
 
         assert_eq!(dfa.find(b"hello"), Some((0, 5)), "Should match exact");
 
-        assert_eq!(dfa.find(b"hello world"), None, "Should not match with suffix");
+        assert_eq!(
+            dfa.find(b"hello world"),
+            None,
+            "Should not match with suffix"
+        );
         assert_eq!(dfa.find(b"say hello"), None, "Should not match with prefix");
         assert_eq!(dfa.find(b" hello "), None, "Should not match with both");
     }
@@ -219,7 +239,10 @@ mod tests {
     #[test]
     fn test_multiline_start_anchor() {
         let mut dfa = make_dfa("(?m)^hello");
-        assert!(dfa.has_multiline_anchors(), "DFA should detect multiline anchors");
+        assert!(
+            dfa.has_multiline_anchors(),
+            "DFA should detect multiline anchors"
+        );
 
         assert_eq!(dfa.find(b"hello world"), Some((0, 5)));
         assert_eq!(dfa.find(b"first\nhello"), Some((6, 11)));

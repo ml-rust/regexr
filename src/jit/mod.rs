@@ -52,15 +52,17 @@ pub use codegen::{CompiledRegex, JitCompiler, MaterializedDfa, MaterializedState
 
 // Re-export liveness types from nfa::tagged (the canonical location)
 #[cfg(all(feature = "jit", target_arch = "x86_64"))]
-pub use crate::nfa::tagged::liveness::{analyze_liveness, CaptureBitSet, NfaLiveness, StateLiveness};
+pub use crate::nfa::tagged::liveness::{
+    analyze_liveness, CaptureBitSet, NfaLiveness, StateLiveness,
+};
 
 // Re-export TaggedNfaJit from nfa::tagged::jit (the canonical location)
 #[cfg(all(feature = "jit", target_arch = "x86_64"))]
-pub use crate::nfa::tagged::jit::{TaggedNfaJit, compile_tagged_nfa};
+pub use crate::nfa::tagged::jit::{compile_tagged_nfa, TaggedNfaJit};
 
 // Re-export BacktrackingJit from vm::backtracking::jit (the canonical location)
 #[cfg(all(feature = "jit", target_arch = "x86_64"))]
-pub use crate::vm::backtracking::jit::{BacktrackingJit, compile_backtracking};
+pub use crate::vm::backtracking::jit::{compile_backtracking, BacktrackingJit};
 
 // Re-export JitShiftOr from vm::shift_or::jit (the canonical location)
 #[cfg(all(feature = "jit", target_arch = "x86_64"))]

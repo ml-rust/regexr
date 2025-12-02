@@ -10,9 +10,7 @@ use crate::vm::{is_shift_or_compatible, is_shift_or_wide_compatible};
 fn hir_uses_codepoint_class(expr: &HirExpr) -> bool {
     match expr {
         HirExpr::UnicodeCpClass(_) => true,
-        HirExpr::Concat(exprs) | HirExpr::Alt(exprs) => {
-            exprs.iter().any(hir_uses_codepoint_class)
-        }
+        HirExpr::Concat(exprs) | HirExpr::Alt(exprs) => exprs.iter().any(hir_uses_codepoint_class),
         HirExpr::Repeat(r) => hir_uses_codepoint_class(&r.expr),
         HirExpr::Capture(c) => hir_uses_codepoint_class(&c.expr),
         HirExpr::Lookaround(l) => hir_uses_codepoint_class(&l.expr),

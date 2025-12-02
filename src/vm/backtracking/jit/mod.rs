@@ -5,4 +5,4 @@
 mod jit;
 mod x86_64;
 
-pub use jit::{BacktrackingJit, compile_backtracking};
+pub use jit::{compile_backtracking, BacktrackingJit};

@@ -20,7 +20,7 @@
 //!
 //! This reduces active threads from O(vocabulary_size) to O(token_length).
 
-use super::{Hir, HirExpr, HirCapture};
+use super::{Hir, HirCapture, HirExpr};
 use std::collections::HashMap;
 
 /// Threshold for when to apply prefix optimization.
@@ -69,9 +69,8 @@ impl TrieNode {
         }
 
         // Collect all children
-        let mut children: Vec<(u8, &TrieNode)> = self.children.iter()
-            .map(|(&b, n)| (b, n))
-            .collect();
+        let mut children: Vec<(u8, &TrieNode)> =
+            self.children.iter().map(|(&b, n)| (b, n)).collect();
         children.sort_by_key(|(b, _)| *b);
 
         // If there's only one child, we can create a concat
@@ -98,23 +97,26 @@ impl TrieNode {
             }
         } else {
             // Multiple children - create an alternation
-            let alts: Vec<HirExpr> = children.iter().map(|(byte, child)| {
-                let literal = HirExpr::Literal(vec![*byte]);
-                let child_hir = if child.is_terminal && !child.children.is_empty() {
-                    child.to_hir_with_optional_suffix()
-                } else {
-                    child.to_hir()
-                };
+            let alts: Vec<HirExpr> = children
+                .iter()
+                .map(|(byte, child)| {
+                    let literal = HirExpr::Literal(vec![*byte]);
+                    let child_hir = if child.is_terminal && !child.children.is_empty() {
+                        child.to_hir_with_optional_suffix()
+                    } else {
+                        child.to_hir()
+                    };
 
-                match child_hir {
-                    HirExpr::Empty => literal,
-                    HirExpr::Concat(mut parts) => {
-                        parts.insert(0, literal);
-                        HirExpr::Concat(parts)
+                    match child_hir {
+                        HirExpr::Empty => literal,
+                        HirExpr::Concat(mut parts) => {
+                            parts.insert(0, literal);
+                            HirExpr::Concat(parts)
+                        }
+                        other => HirExpr::Concat(vec![literal, other]),
                     }
-                    other => HirExpr::Concat(vec![literal, other]),
-                }
-            }).collect();
+                })
+                .collect();
 
             if alts.len() == 1 {
                 alts.into_iter().next().unwrap()
@@ -152,32 +154,24 @@ fn optimize_expr(expr: HirExpr) -> HirExpr {
     match expr {
         HirExpr::Alt(variants) => optimize_alternation(variants),
         HirExpr::Concat(parts) => {
-            let optimized: Vec<HirExpr> = parts.into_iter()
-                .map(optimize_expr)
-                .collect();
+            let optimized: Vec<HirExpr> = parts.into_iter().map(optimize_expr).collect();
             HirExpr::Concat(optimized)
         }
-        HirExpr::Repeat(rep) => {
-            HirExpr::Repeat(Box::new(super::HirRepeat {
-                expr: optimize_expr(rep.expr),
-                min: rep.min,
-                max: rep.max,
-                greedy: rep.greedy,
-            }))
-        }
-        HirExpr::Capture(cap) => {
-            HirExpr::Capture(Box::new(HirCapture {
-                index: cap.index,
-                name: cap.name,
-                expr: optimize_expr(cap.expr),
-            }))
-        }
-        HirExpr::Lookaround(la) => {
-            HirExpr::Lookaround(Box::new(super::HirLookaround {
-                expr: optimize_expr(la.expr),
-                kind: la.kind,
-            }))
-        }
+        HirExpr::Repeat(rep) => HirExpr::Repeat(Box::new(super::HirRepeat {
+            expr: optimize_expr(rep.expr),
+            min: rep.min,
+            max: rep.max,
+            greedy: rep.greedy,
+        })),
+        HirExpr::Capture(cap) => HirExpr::Capture(Box::new(HirCapture {
+            index: cap.index,
+            name: cap.name,
+            expr: optimize_expr(cap.expr),
+        })),
+        HirExpr::Lookaround(la) => HirExpr::Lookaround(Box::new(super::HirLookaround {
+            expr: optimize_expr(la.expr),
+            kind: la.kind,
+        })),
         // These don't need optimization
         other => other,
     }
@@ -204,7 +198,8 @@ fn optimize_alternation(variants: Vec<HirExpr>) -> HirExpr {
     // Only optimize if we have enough literals
     if literals.len() < MIN_LITERALS_FOR_OPTIMIZATION {
         // Put literals back as-is
-        let mut result: Vec<HirExpr> = literals.into_iter()
+        let mut result: Vec<HirExpr> = literals
+            .into_iter()
             .map(|(bytes, cap_idx, cap_name)| {
                 let lit = HirExpr::Literal(bytes);
                 wrap_in_capture(lit, cap_idx, cap_name)
@@ -328,9 +323,7 @@ mod tests {
     #[test]
     fn test_optimize_large_alternation() {
         // Large alternations should be optimized
-        let expr = alt(vec![
-            lit("the"), lit("that"), lit("them"), lit("they"),
-        ]);
+        let expr = alt(vec![lit("the"), lit("that"), lit("them"), lit("they")]);
         let hir = Hir {
             expr,
             props: HirProps::default(),
@@ -350,7 +343,10 @@ mod tests {
     fn test_optimize_mixed() {
         // Mix of literals and complex expressions
         let expr = alt(vec![
-            lit("the"), lit("that"), lit("them"), lit("they"),
+            lit("the"),
+            lit("that"),
+            lit("them"),
+            lit("they"),
             HirExpr::Repeat(Box::new(super::super::HirRepeat {
                 expr: lit("x"),
                 min: 1,
@@ -372,7 +368,10 @@ mod tests {
     fn test_no_common_prefix() {
         // Literals with no common prefix
         let expr = alt(vec![
-            lit("apple"), lit("banana"), lit("cherry"), lit("date"),
+            lit("apple"),
+            lit("banana"),
+            lit("cherry"),
+            lit("date"),
         ]);
         let hir = Hir {
             expr,
@@ -388,8 +387,12 @@ mod tests {
     fn test_partial_overlap() {
         // Some words share prefixes, some don't
         let expr = alt(vec![
-            lit("test"), lit("testing"), lit("tested"), lit("tester"),
-            lit("apple"), lit("application"),
+            lit("test"),
+            lit("testing"),
+            lit("tested"),
+            lit("tester"),
+            lit("apple"),
+            lit("application"),
         ]);
         let hir = Hir {
             expr,

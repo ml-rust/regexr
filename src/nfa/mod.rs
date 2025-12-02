@@ -15,9 +15,9 @@
 
 mod glushkov;
 mod state;
+pub mod tagged;
 mod thompson;
 pub mod utf8_automata;
-pub mod tagged;
 
 pub use glushkov::{
     compile_glushkov, compile_glushkov_wide, BitSet256, BitSet256Iter, ByteSet, GlushkovNfa,

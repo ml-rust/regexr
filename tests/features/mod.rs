@@ -7,9 +7,9 @@
 //! - Named captures
 //! - Syntax validation
 
+use regexr::Regex;
 #[cfg(feature = "jit")]
 use regexr::RegexBuilder;
-use regexr::Regex;
 
 /// Creates a Regex with JIT enabled when the `jit` feature is available.
 #[allow(dead_code)]

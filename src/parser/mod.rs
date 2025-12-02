@@ -71,10 +71,7 @@ impl<'a> Parser<'a> {
 
     /// Advances to the next token.
     fn advance(&mut self) -> Result<Token> {
-        let prev = std::mem::replace(
-            &mut self.current,
-            self.lexer.next_token()?,
-        );
+        let prev = std::mem::replace(&mut self.current, self.lexer.next_token()?);
         Ok(prev)
     }
 
@@ -692,7 +689,9 @@ impl<'a> Parser<'a> {
                                         }
                                         let start = start.min(0x10FFFF);
                                         let end = end.min(0x10FFFF);
-                                        if let (Some(s), Some(e)) = (char::from_u32(start), char::from_u32(end)) {
+                                        if let (Some(s), Some(e)) =
+                                            (char::from_u32(start), char::from_u32(end))
+                                        {
                                             ranges.push(ClassRange::new(s, e));
                                         }
                                     }
@@ -729,23 +728,33 @@ impl<'a> Parser<'a> {
                             // Handle ranges that span across surrogates
                             if start < 0xD800 && end > 0xDFFF {
                                 // Split into two ranges: before and after surrogates
-                                if let (Some(s), Some(e)) = (char::from_u32(start), char::from_u32(0xD7FF)) {
+                                if let (Some(s), Some(e)) =
+                                    (char::from_u32(start), char::from_u32(0xD7FF))
+                                {
                                     ranges.push(ClassRange::new(s, e));
                                 }
-                                if let (Some(s), Some(e)) = (char::from_u32(0xE000), char::from_u32(end)) {
+                                if let (Some(s), Some(e)) =
+                                    (char::from_u32(0xE000), char::from_u32(end))
+                                {
                                     ranges.push(ClassRange::new(s, e));
                                 }
                             } else if start <= 0xD7FF && end >= 0xD800 && end <= 0xDFFF {
                                 // Range ends in surrogates, truncate
-                                if let (Some(s), Some(e)) = (char::from_u32(start), char::from_u32(0xD7FF)) {
+                                if let (Some(s), Some(e)) =
+                                    (char::from_u32(start), char::from_u32(0xD7FF))
+                                {
                                     ranges.push(ClassRange::new(s, e));
                                 }
                             } else if start >= 0xD800 && start <= 0xDFFF && end > 0xDFFF {
                                 // Range starts in surrogates, start from after
-                                if let (Some(s), Some(e)) = (char::from_u32(0xE000), char::from_u32(end)) {
+                                if let (Some(s), Some(e)) =
+                                    (char::from_u32(0xE000), char::from_u32(end))
+                                {
                                     ranges.push(ClassRange::new(s, e));
                                 }
-                            } else if let (Some(s), Some(e)) = (char::from_u32(start), char::from_u32(end)) {
+                            } else if let (Some(s), Some(e)) =
+                                (char::from_u32(start), char::from_u32(end))
+                            {
                                 ranges.push(ClassRange::new(s, e));
                             }
                         }
@@ -754,7 +763,8 @@ impl<'a> Parser<'a> {
                         if negated {
                             // Compute complement: all characters NOT in the property ranges
                             // The ranges we just added are the positive ranges, we need their complement
-                            let count_to_drain = code_point_ranges.iter()
+                            let count_to_drain = code_point_ranges
+                                .iter()
                                 .filter(|&&(start, _)| {
                                     // Count how many ranges we actually added
                                     start < 0xD800 || start > 0xDFFF
@@ -762,15 +772,21 @@ impl<'a> Parser<'a> {
                                 .map(|&(start, end)| {
                                     let start = start.min(0x10FFFF);
                                     let end = end.min(0x10FFFF);
-                                    if start < 0xD800 && end > 0xDFFF { 2 } else { 1 }
+                                    if start < 0xD800 && end > 0xDFFF {
+                                        2
+                                    } else {
+                                        1
+                                    }
                                 })
                                 .sum::<usize>();
                             let drain_start = ranges.len().saturating_sub(count_to_drain);
-                            let positive_ranges: Vec<ClassRange> = ranges.drain(drain_start..).collect();
+                            let positive_ranges: Vec<ClassRange> =
+                                ranges.drain(drain_start..).collect();
 
                             // Compute complement of positive_ranges
                             // Sort and merge positive ranges first
-                            let mut sorted: Vec<(u32, u32)> = positive_ranges.iter()
+                            let mut sorted: Vec<(u32, u32)> = positive_ranges
+                                .iter()
                                 .map(|r| (r.start as u32, r.end as u32))
                                 .collect();
                             sorted.sort_by_key(|r| r.0);
@@ -799,7 +815,9 @@ impl<'a> Parser<'a> {
                                         let s = gap_start;
                                         let e = gap_end.min(0xD7FF);
                                         if s <= e {
-                                            if let (Some(cs), Some(ce)) = (char::from_u32(s), char::from_u32(e)) {
+                                            if let (Some(cs), Some(ce)) =
+                                                (char::from_u32(s), char::from_u32(e))
+                                            {
                                                 ranges.push(ClassRange::new(cs, ce));
                                             }
                                         }
@@ -808,7 +826,9 @@ impl<'a> Parser<'a> {
                                         let s = gap_start.max(0xE000);
                                         let e = gap_end;
                                         if s <= e {
-                                            if let (Some(cs), Some(ce)) = (char::from_u32(s), char::from_u32(e)) {
+                                            if let (Some(cs), Some(ce)) =
+                                                (char::from_u32(s), char::from_u32(e))
+                                            {
                                                 ranges.push(ClassRange::new(cs, ce));
                                             }
                                         }
@@ -824,7 +844,9 @@ impl<'a> Parser<'a> {
                                     let s = gap_start;
                                     let e = gap_end.min(0xD7FF);
                                     if s <= e {
-                                        if let (Some(cs), Some(ce)) = (char::from_u32(s), char::from_u32(e)) {
+                                        if let (Some(cs), Some(ce)) =
+                                            (char::from_u32(s), char::from_u32(e))
+                                        {
                                             ranges.push(ClassRange::new(cs, ce));
                                         }
                                     }
@@ -833,7 +855,9 @@ impl<'a> Parser<'a> {
                                     let s = gap_start.max(0xE000);
                                     let e = gap_end;
                                     if s <= e {
-                                        if let (Some(cs), Some(ce)) = (char::from_u32(s), char::from_u32(e)) {
+                                        if let (Some(cs), Some(ce)) =
+                                            (char::from_u32(s), char::from_u32(e))
+                                        {
                                             ranges.push(ClassRange::new(cs, ce));
                                         }
                                     }
@@ -889,8 +913,8 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                         // [^\d] = everything except 0-9
                         Ok(ClassItem::Ranges(vec![
-                            ClassRange::new('\x00', '/'),  // 0x00-0x2F
-                            ClassRange::new(':', '\u{10FFFF}'),  // 0x3A onwards
+                            ClassRange::new('\x00', '/'),       // 0x00-0x2F
+                            ClassRange::new(':', '\u{10FFFF}'), // 0x3A onwards
                         ]))
                     }
                     EscapeKind::Word => {
@@ -906,10 +930,10 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                         // [^\w] = everything except [a-zA-Z0-9_]
                         Ok(ClassItem::Ranges(vec![
-                            ClassRange::new('\x00', '/'),   // before '0'
-                            ClassRange::new(':', '@'),      // between '9' and 'A'
-                            ClassRange::new('[', '^'),      // between 'Z' and '_'
-                            ClassRange::single('`'),        // between '_' and 'a'
+                            ClassRange::new('\x00', '/'),       // before '0'
+                            ClassRange::new(':', '@'),          // between '9' and 'A'
+                            ClassRange::new('[', '^'),          // between 'Z' and '_'
+                            ClassRange::single('`'),            // between '_' and 'a'
                             ClassRange::new('{', '\u{10FFFF}'), // after 'z'
                         ]))
                     }
@@ -920,16 +944,16 @@ impl<'a> Parser<'a> {
                             ClassRange::single('\t'),
                             ClassRange::single('\n'),
                             ClassRange::single('\r'),
-                            ClassRange::single('\x0C'),  // form feed
-                            ClassRange::single('\x0B'),  // vertical tab
+                            ClassRange::single('\x0C'), // form feed
+                            ClassRange::single('\x0B'), // vertical tab
                         ]))
                     }
                     EscapeKind::NotWhitespace => {
                         self.advance()?;
                         // [^\s] = everything except whitespace
                         Ok(ClassItem::Ranges(vec![
-                            ClassRange::new('\x00', '\x08'),  // before \t
-                            ClassRange::new('\x0E', '\x1F'),  // between \r and space
+                            ClassRange::new('\x00', '\x08'),    // before \t
+                            ClassRange::new('\x0E', '\x1F'),    // between \r and space
                             ClassRange::new('!', '\u{10FFFF}'), // after space
                         ]))
                     }
@@ -972,12 +996,18 @@ impl<'a> Parser<'a> {
                     EscapeKind::UnicodeProperty(name) => {
                         let name = name.clone();
                         self.advance()?;
-                        Ok(ClassItem::UnicodeProperty { name, negated: false })
+                        Ok(ClassItem::UnicodeProperty {
+                            name,
+                            negated: false,
+                        })
                     }
                     EscapeKind::NotUnicodeProperty(name) => {
                         let name = name.clone();
                         self.advance()?;
-                        Ok(ClassItem::UnicodeProperty { name, negated: true })
+                        Ok(ClassItem::UnicodeProperty {
+                            name,
+                            negated: true,
+                        })
                     }
                     _ => Err(Error::with_span(
                         ErrorKind::InvalidEscape('?'),
@@ -1123,7 +1153,10 @@ mod tests {
             assert_eq!(exprs.len(), 3);
             assert!(matches!(exprs[0], Expr::PerlClass(PerlClassKind::Digit)));
             assert!(matches!(exprs[1], Expr::PerlClass(PerlClassKind::Word)));
-            assert!(matches!(exprs[2], Expr::PerlClass(PerlClassKind::Whitespace)));
+            assert!(matches!(
+                exprs[2],
+                Expr::PerlClass(PerlClassKind::Whitespace)
+            ));
         } else {
             panic!("Expected Concat");
         }

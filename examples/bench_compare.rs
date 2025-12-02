@@ -32,7 +32,12 @@ fn run_find_bench(name: &str, pattern: &str, text: &str, iterations: u32) -> Ben
         .unwrap();
 
     // Debug: print engine names
-    eprintln!("{}: non-jit={}, jit={}", name, regexr_re.engine_name(), regexr_jit.engine_name());
+    eprintln!(
+        "{}: non-jit={}, jit={}",
+        name,
+        regexr_re.engine_name(),
+        regexr_jit.engine_name()
+    );
 
     let pcre2_re = pcre2::bytes::Regex::new(pattern).unwrap();
     let pcre2_jit = pcre2::bytes::RegexBuilder::new()
@@ -62,7 +67,12 @@ fn run_captures_bench(name: &str, pattern: &str, text: &str, iterations: u32) ->
         .unwrap();
 
     // Debug: print engine names
-    eprintln!("{}: non-jit={}, jit={}", name, regexr_re.engine_name(), regexr_jit.engine_name());
+    eprintln!(
+        "{}: non-jit={}, jit={}",
+        name,
+        regexr_re.engine_name(),
+        regexr_jit.engine_name()
+    );
 
     let pcre2_re = pcre2::bytes::Regex::new(pattern).unwrap();
     let pcre2_jit = pcre2::bytes::RegexBuilder::new()
@@ -106,7 +116,12 @@ fn run_is_match_bench(name: &str, pattern: &str, lines: &[&str], iterations: u32
         .unwrap();
 
     // Debug: print engine names
-    eprintln!("{}: non-jit={}, jit={}", name, regexr_re.engine_name(), regexr_jit.engine_name());
+    eprintln!(
+        "{}: non-jit={}, jit={}",
+        name,
+        regexr_re.engine_name(),
+        regexr_jit.engine_name()
+    );
 
     let pcre2_re = pcre2::bytes::Regex::new(pattern).unwrap();
     let pcre2_jit = pcre2::bytes::RegexBuilder::new()
@@ -152,7 +167,12 @@ fn run_backref_bench(name: &str, pattern: &str, text: &str, iterations: u32) -> 
         .unwrap();
 
     // Debug: print engine names
-    eprintln!("{}: non-jit={}, jit={}", name, regexr_re.engine_name(), regexr_jit.engine_name());
+    eprintln!(
+        "{}: non-jit={}, jit={}",
+        name,
+        regexr_re.engine_name(),
+        regexr_jit.engine_name()
+    );
 
     let pcre2_re = pcre2::bytes::Regex::new(pattern).unwrap();
     let pcre2_jit = pcre2::bytes::RegexBuilder::new()
@@ -182,7 +202,12 @@ fn run_lookaround_bench(name: &str, pattern: &str, text: &str, iterations: u32) 
         .unwrap();
 
     // Debug: print engine names
-    eprintln!("{}: non-jit={}, jit={}", name, regexr_re.engine_name(), regexr_jit.engine_name());
+    eprintln!(
+        "{}: non-jit={}, jit={}",
+        name,
+        regexr_re.engine_name(),
+        regexr_jit.engine_name()
+    );
 
     let pcre2_re = pcre2::bytes::Regex::new(pattern).unwrap();
     let pcre2_jit = pcre2::bytes::RegexBuilder::new()
@@ -432,7 +457,8 @@ fn main() {
 
     // 14. Positive lookbehind - match word after "@" (like email domains)
     let lookbehind_pos_pattern = r"(?<=@)\w+";
-    let lookbehind_text = "user@example.com admin@test.org info@domain.co.uk support@company.io\n".repeat(10);
+    let lookbehind_text =
+        "user@example.com admin@test.org info@domain.co.uk support@company.io\n".repeat(10);
     results.push(run_lookaround_bench(
         "POS LOOKBEHIND",
         lookbehind_pos_pattern,
@@ -442,7 +468,8 @@ fn main() {
 
     // 15. Negative lookbehind - match digits NOT preceded by "$"
     let lookbehind_neg_pattern = r"(?<!\$)\d+";
-    let lookbehind_neg_text = "Price: $100 Quantity: 50 Total: $500 Count: 25 Value: $1000 Items: 10\n".repeat(10);
+    let lookbehind_neg_text =
+        "Price: $100 Quantity: 50 Total: $500 Count: 25 Value: $1000 Items: 10\n".repeat(10);
     results.push(run_lookaround_bench(
         "NEG LOOKBEHIND",
         lookbehind_neg_pattern,
@@ -452,7 +479,8 @@ fn main() {
 
     // 16. Complex lookahead - password validation style (word with digit ahead)
     let complex_lookahead_pattern = r"\w+(?=.*\d)";
-    let complex_lookahead_text = "password123 secret456 admin user guest root test99 demo hello world\n".repeat(10);
+    let complex_lookahead_text =
+        "password123 secret456 admin user guest root test99 demo hello world\n".repeat(10);
     results.push(run_lookaround_bench(
         "COMPLEX LOOKAHEAD",
         complex_lookahead_pattern,

@@ -112,9 +112,10 @@ impl BacktrackingCompiler {
         self.emit_epilogue();
 
         // Finalize the code
-        let code = self.asm.finalize().map_err(|e| {
-            Error::new(ErrorKind::Jit(format!("Failed to finalize: {:?}", e)), "")
-        })?;
+        let code = self
+            .asm
+            .finalize()
+            .map_err(|e| Error::new(ErrorKind::Jit(format!("Failed to finalize: {:?}", e)), ""))?;
 
         let match_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut i64) -> i64 =
             unsafe { std::mem::transmute(code.ptr(entry_offset)) };

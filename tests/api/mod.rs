@@ -5,9 +5,9 @@
 //!
 //! When the `jit` feature is enabled, these tests use JIT compilation.
 
+use regexr::Regex;
 #[cfg(feature = "jit")]
 use regexr::RegexBuilder;
-use regexr::Regex;
 
 /// Creates a Regex with JIT enabled when the `jit` feature is available.
 #[allow(dead_code)]
@@ -306,10 +306,7 @@ mod jit_alternation {
 
     #[test]
     fn test_jit_simple_alternation() {
-        let re = RegexBuilder::new(r"foo|bar")
-            .jit(true)
-            .build()
-            .unwrap();
+        let re = RegexBuilder::new(r"foo|bar").jit(true).build().unwrap();
 
         assert!(re.is_match("foo"));
         assert!(re.is_match("bar"));
@@ -318,10 +315,7 @@ mod jit_alternation {
 
     #[test]
     fn test_jit_alternation_find() {
-        let re = RegexBuilder::new(r"foo|bar")
-            .jit(true)
-            .build()
-            .unwrap();
+        let re = RegexBuilder::new(r"foo|bar").jit(true).build().unwrap();
 
         let m = re.find("xyzfoo123").unwrap();
         assert_eq!(m.start(), 3);
@@ -369,10 +363,7 @@ mod jit_alternation {
 
     #[test]
     fn test_jit_alternation_find_iter() {
-        let re = RegexBuilder::new(r"foo|bar")
-            .jit(true)
-            .build()
-            .unwrap();
+        let re = RegexBuilder::new(r"foo|bar").jit(true).build().unwrap();
 
         let text = "foo bar foo bar baz";
         let matches: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
@@ -381,10 +372,7 @@ mod jit_alternation {
 
     #[test]
     fn test_jit_alternation_different_lengths() {
-        let re = RegexBuilder::new(r"a|bb|ccc")
-            .jit(true)
-            .build()
-            .unwrap();
+        let re = RegexBuilder::new(r"a|bb|ccc").jit(true).build().unwrap();
 
         assert!(re.is_match("a"));
         assert!(re.is_match("bb"));

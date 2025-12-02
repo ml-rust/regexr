@@ -21,9 +21,9 @@
 //! - No hash map lookups during matching
 //! - Ideal for patterns that will be matched many times
 
-pub(crate) mod shared;
 mod engine;
 pub mod interpreter;
+pub(crate) mod shared;
 
 // Re-exports
 pub use engine::EagerDfaEngine;

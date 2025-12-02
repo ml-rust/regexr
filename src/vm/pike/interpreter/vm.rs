@@ -241,13 +241,7 @@ impl PikeVm {
     /// The instruction has already been processed, so we just add to current_threads
     /// and follow epsilon transitions.
     #[inline]
-    fn add_future_thread(
-        &self,
-        ctx: &mut PikeVmContext,
-        thread: Thread,
-        input: &[u8],
-        pos: usize,
-    ) {
+    fn add_future_thread(&self, ctx: &mut PikeVmContext, thread: Thread, input: &[u8], pos: usize) {
         let state_id = thread.state as usize;
 
         // O(1) deduplication check
@@ -293,12 +287,7 @@ impl PikeVm {
     /// Process the epsilon stack, adding threads to current_threads.
     /// This is the core iterative epsilon closure implementation.
     #[inline]
-    fn process_epsilon_stack_current(
-        &self,
-        ctx: &mut PikeVmContext,
-        input: &[u8],
-        pos: usize,
-    ) {
+    fn process_epsilon_stack_current(&self, ctx: &mut PikeVmContext, input: &[u8], pos: usize) {
         while let Some(mut thread) = ctx.epsilon_stack.pop() {
             let state_id = thread.state as usize;
 
@@ -346,7 +335,10 @@ impl PikeVm {
                         }
                         continue;
                     }
-                    InstructionResult::CodepointTransition { bytes_consumed, target } => {
+                    InstructionResult::CodepointTransition {
+                        bytes_consumed,
+                        target,
+                    } => {
                         // Schedule thread at new position
                         let next_thread = thread.clone_with_state(target);
                         ctx.future_threads.push(PendingThread {
@@ -385,12 +377,7 @@ impl PikeVm {
 
     /// Process the epsilon stack, adding threads to next_threads.
     #[inline]
-    fn process_epsilon_stack_next(
-        &self,
-        ctx: &mut PikeVmContext,
-        input: &[u8],
-        pos: usize,
-    ) {
+    fn process_epsilon_stack_next(&self, ctx: &mut PikeVmContext, input: &[u8], pos: usize) {
         while let Some(mut thread) = ctx.epsilon_stack.pop() {
             let state_id = thread.state as usize;
 
@@ -433,7 +420,10 @@ impl PikeVm {
                         });
                         continue;
                     }
-                    InstructionResult::CodepointTransition { bytes_consumed, target } => {
+                    InstructionResult::CodepointTransition {
+                        bytes_consumed,
+                        target,
+                    } => {
                         let next_thread = thread.clone_with_state(target);
                         ctx.future_threads.push(PendingThread {
                             pos: pos + bytes_consumed,
@@ -673,7 +663,10 @@ impl PikeVm {
                 let remaining = &input[pos..];
                 if let Some((codepoint, len)) = decode_utf8_codepoint(remaining) {
                     if cpclass.contains(codepoint) {
-                        InstructionResult::CodepointTransition { bytes_consumed: len, target: *target }
+                        InstructionResult::CodepointTransition {
+                            bytes_consumed: len,
+                            target: *target,
+                        }
                     } else {
                         InstructionResult::Kill
                     }

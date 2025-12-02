@@ -31,8 +31,7 @@ impl BacktrackingJit {
         let num_slots = (self.capture_count as usize + 1) * 2;
         let mut captures: Vec<i64> = vec![-1; num_slots];
 
-        let result =
-            unsafe { (self.match_fn)(input.as_ptr(), input.len(), captures.as_mut_ptr()) };
+        let result = unsafe { (self.match_fn)(input.as_ptr(), input.len(), captures.as_mut_ptr()) };
 
         if result >= 0 {
             // Group 0 contains the full match
@@ -89,8 +88,7 @@ impl BacktrackingJit {
         let num_slots = (self.capture_count as usize + 1) * 2;
         let mut captures: Vec<i64> = vec![-1; num_slots];
 
-        let result =
-            unsafe { (self.match_fn)(input.as_ptr(), input.len(), captures.as_mut_ptr()) };
+        let result = unsafe { (self.match_fn)(input.as_ptr(), input.len(), captures.as_mut_ptr()) };
 
         (result, captures)
     }

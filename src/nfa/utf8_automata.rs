@@ -76,11 +76,11 @@ pub fn compile_utf8_range(start: u32, end: u32) -> Vec<Utf8Sequence> {
 
     // Split the range at UTF-8 encoding boundaries
     let boundaries = [
-        0x00,      // 1-byte start
-        0x80,      // 2-byte start
-        0x800,     // 3-byte start
-        0x10000,   // 4-byte start
-        0x110000,  // End (one past max Unicode)
+        0x00,     // 1-byte start
+        0x80,     // 2-byte start
+        0x800,    // 3-byte start
+        0x10000,  // 4-byte start
+        0x110000, // End (one past max Unicode)
     ];
 
     let mut current = start;
@@ -293,7 +293,12 @@ fn compile_4byte_with_fixed_byte1(start: u32, end: u32, byte1: u8) -> Vec<Utf8Se
 }
 
 /// Compiles 4-byte sequences with fixed first and second bytes.
-fn compile_4byte_with_fixed_byte12(start: u32, end: u32, byte1: u8, byte2: u8) -> Vec<Utf8Sequence> {
+fn compile_4byte_with_fixed_byte12(
+    start: u32,
+    end: u32,
+    byte1: u8,
+    byte2: u8,
+) -> Vec<Utf8Sequence> {
     let mut sequences = Vec::new();
     let mut current = start;
 
@@ -567,7 +572,10 @@ mod tests {
     #[test]
     fn test_encode_code_point_4byte() {
         // U+1F600 = '😀' = 0xF0 0x9F 0x98 0x80
-        assert_eq!(encode_code_point(0x1F600), Some(vec![0xF0, 0x9F, 0x98, 0x80]));
+        assert_eq!(
+            encode_code_point(0x1F600),
+            Some(vec![0xF0, 0x9F, 0x98, 0x80])
+        );
     }
 
     #[test]
@@ -761,10 +769,7 @@ mod tests {
                     let (b2_start, _) = seq.ranges[1];
                     // If first byte is 0xED, second byte should not start at 0xA0 or higher
                     // (which would enter surrogate territory)
-                    assert!(
-                        b2_start < 0xA0,
-                        "Should not generate surrogate sequences"
-                    );
+                    assert!(b2_start < 0xA0, "Should not generate surrogate sequences");
                 }
             }
         }

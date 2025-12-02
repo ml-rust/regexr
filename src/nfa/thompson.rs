@@ -1,7 +1,10 @@
 //! Thompson's construction for building NFAs.
 
 use crate::error::Result;
-use crate::hir::{CodepointClass, Hir, HirAnchor, HirCapture, HirClass, HirExpr, HirLookaround, HirLookaroundKind, HirRepeat};
+use crate::hir::{
+    CodepointClass, Hir, HirAnchor, HirCapture, HirClass, HirExpr, HirLookaround,
+    HirLookaroundKind, HirRepeat,
+};
 use std::sync::Arc;
 
 use super::{ByteRange, Nfa, NfaInstruction, NfaState, StateId};
@@ -20,9 +23,7 @@ pub struct NfaBuilder {
 impl NfaBuilder {
     /// Creates a new builder.
     pub fn new() -> Self {
-        Self {
-            nfa: Nfa::new(),
-        }
+        Self { nfa: Nfa::new() }
     }
 
     /// Builds an NFA from HIR.
@@ -70,7 +71,10 @@ impl NfaBuilder {
     /// Builds an empty fragment (epsilon).
     fn build_empty(&mut self) -> Result<Fragment> {
         let state = self.add_state();
-        Ok(Fragment { start: state, end: state })
+        Ok(Fragment {
+            start: state,
+            end: state,
+        })
     }
 
     /// Builds a literal byte sequence.
@@ -96,7 +100,10 @@ impl NfaBuilder {
             current = next;
         }
 
-        Ok(Fragment { start, end: current })
+        Ok(Fragment {
+            start,
+            end: current,
+        })
     }
 
     /// Builds a character class.
@@ -336,7 +343,10 @@ impl NfaBuilder {
             }
         }
 
-        Ok(Fragment { start: fragment.start, end })
+        Ok(Fragment {
+            start: fragment.start,
+            end,
+        })
     }
 
     /// Builds a{n} (exactly n).
@@ -410,7 +420,11 @@ impl NfaBuilder {
             }
         }
 
-        let (start, end) = match (required, optional_fragments.first(), optional_fragments.last()) {
+        let (start, end) = match (
+            required,
+            optional_fragments.first(),
+            optional_fragments.last(),
+        ) {
             (Some(req), Some(opt_first), Some(opt_last)) => {
                 if let Some(state) = self.nfa.get_mut(req.end) {
                     state.add_epsilon(opt_first.start);
@@ -478,7 +492,10 @@ impl NfaBuilder {
             s.instruction = Some(instruction);
         }
 
-        Ok(Fragment { start: state, end: state })
+        Ok(Fragment {
+            start: state,
+            end: state,
+        })
     }
 
     /// Builds a lookaround.
@@ -502,25 +519,20 @@ impl NfaBuilder {
         let inner_nfa = Arc::new(inner_nfa);
 
         let instruction = match la.kind {
-            HirLookaroundKind::PositiveLookahead => {
-                NfaInstruction::PositiveLookahead(inner_nfa)
-            }
-            HirLookaroundKind::NegativeLookahead => {
-                NfaInstruction::NegativeLookahead(inner_nfa)
-            }
-            HirLookaroundKind::PositiveLookbehind => {
-                NfaInstruction::PositiveLookbehind(inner_nfa)
-            }
-            HirLookaroundKind::NegativeLookbehind => {
-                NfaInstruction::NegativeLookbehind(inner_nfa)
-            }
+            HirLookaroundKind::PositiveLookahead => NfaInstruction::PositiveLookahead(inner_nfa),
+            HirLookaroundKind::NegativeLookahead => NfaInstruction::NegativeLookahead(inner_nfa),
+            HirLookaroundKind::PositiveLookbehind => NfaInstruction::PositiveLookbehind(inner_nfa),
+            HirLookaroundKind::NegativeLookbehind => NfaInstruction::NegativeLookbehind(inner_nfa),
         };
 
         if let Some(s) = self.nfa.get_mut(state) {
             s.instruction = Some(instruction);
         }
 
-        Ok(Fragment { start: state, end: state })
+        Ok(Fragment {
+            start: state,
+            end: state,
+        })
     }
 
     /// Builds a backreference.
@@ -531,7 +543,10 @@ impl NfaBuilder {
             s.instruction = Some(NfaInstruction::Backref(n));
         }
 
-        Ok(Fragment { start: state, end: state })
+        Ok(Fragment {
+            start: state,
+            end: state,
+        })
     }
 }
 

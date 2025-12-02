@@ -6,11 +6,11 @@
 //! - `PikeVm` - Fallback for captures and complex patterns
 //! - `TaggedNfaJit` - JIT-compiled execution (when `jit` feature is enabled)
 
+use super::interpreter::TaggedNfa;
+use super::shared::PatternStep;
+use super::steps::StepExtractor;
 use crate::nfa::Nfa;
 use crate::vm::{PikeVm, PikeVmContext};
-use super::steps::StepExtractor;
-use super::shared::PatternStep;
-use super::interpreter::TaggedNfa;
 
 use std::sync::RwLock;
 
@@ -35,7 +35,11 @@ impl TaggedNfaEngine {
         // Create PikeVm for capture extraction and fallback
         let pike_vm = PikeVm::new(nfa);
         let pike_ctx = RwLock::new(pike_vm.create_context());
-        Self { steps, pike_vm, pike_ctx }
+        Self {
+            steps,
+            pike_vm,
+            pike_ctx,
+        }
     }
 
     /// Returns whether the pattern matches the input.

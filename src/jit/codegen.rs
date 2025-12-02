@@ -80,13 +80,9 @@ impl CompiledRegex {
             self.entry_point
         };
 
-        let func: MatchFn = unsafe {
-            std::mem::transmute(self.code.ptr(entry))
-        };
+        let func: MatchFn = unsafe { std::mem::transmute(self.code.ptr(entry)) };
 
-        let result = unsafe {
-            func(input.as_ptr(), input.len())
-        };
+        let result = unsafe { func(input.as_ptr(), input.len()) };
 
         if result >= 0 {
             // Unpack the result: start in upper 32 bits, end in lower 32 bits
@@ -106,9 +102,17 @@ impl CompiledRegex {
     }
 
     /// Validates that end assertions (word boundaries and anchors) are satisfied.
-    fn validate_end_assertions(&self, input: &[u8], start_pos: usize, end_pos: usize, prev_class: CharClass) -> bool {
+    fn validate_end_assertions(
+        &self,
+        input: &[u8],
+        start_pos: usize,
+        end_pos: usize,
+        prev_class: CharClass,
+    ) -> bool {
         // Validate word boundary assertions
-        if self.has_word_boundary && (self.match_needs_word_boundary || self.match_needs_not_word_boundary) {
+        if self.has_word_boundary
+            && (self.match_needs_word_boundary || self.match_needs_not_word_boundary)
+        {
             // Compute whether we're at a word boundary at end_pos
             // For unanchored search, prev_class is relative to the original input,
             // but we need to consider the actual char before start_pos
@@ -285,7 +289,8 @@ impl JitCompiler {
         let materialized = self.materialize_dfa(dfa)?;
 
         // Step 2: Compile to machine code
-        let (code, entry_point, entry_point_word) = crate::jit::x86_64::compile_states(&materialized)?;
+        let (code, entry_point, entry_point_word) =
+            crate::jit::x86_64::compile_states(&materialized)?;
 
         // Collect boundary and anchor requirements from all match states
         let mut match_needs_word_boundary = false;
@@ -530,8 +535,8 @@ mod tests {
         assert!(compiled.is_full_match(b"abc"));
         assert!(!compiled.is_full_match(b"ab"));
         assert!(!compiled.is_full_match(b"abcd"));
-        assert!(compiled.is_match(b"abcd"));  // "abcd" contains "abc"
-        assert!(compiled.is_match(b"xyzabc"));  // "xyzabc" contains "abc"
+        assert!(compiled.is_match(b"abcd")); // "abcd" contains "abc"
+        assert!(compiled.is_match(b"xyzabc")); // "xyzabc" contains "abc"
         assert!(!compiled.is_match(b"xyz"));
     }
 
@@ -584,7 +589,7 @@ mod tests {
         let abc_range = ranges.iter().find(|(_, _, target)| *target == 1).unwrap();
         assert_eq!(abc_range.0, b'a'); // start
         assert_eq!(abc_range.1, b'c'); // end (inclusive)
-        assert_eq!(abc_range.2, 1);    // target
+        assert_eq!(abc_range.2, 1); // target
     }
 
     #[test]

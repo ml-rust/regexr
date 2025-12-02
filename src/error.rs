@@ -30,7 +30,10 @@ impl Span {
 
     /// Creates a span for a single position.
     pub fn point(pos: usize) -> Self {
-        Self { start: pos, end: pos + 1 }
+        Self {
+            start: pos,
+            end: pos + 1,
+        }
     }
 }
 
@@ -207,11 +210,7 @@ mod tests {
 
     #[test]
     fn test_error_display() {
-        let err = Error::with_span(
-            ErrorKind::UnexpectedChar('?'),
-            "a?*b",
-            Span::new(2, 3),
-        );
+        let err = Error::with_span(ErrorKind::UnexpectedChar('?'), "a?*b", Span::new(2, 3));
         let msg = err.to_string();
         assert!(msg.contains("unexpected character"));
         assert!(msg.contains("position 2"));
@@ -220,7 +219,11 @@ mod tests {
     #[test]
     fn test_error_kind_display() {
         assert_eq!(
-            ErrorKind::InvalidClassRange { start: 'z', end: 'a' }.to_string(),
+            ErrorKind::InvalidClassRange {
+                start: 'z',
+                end: 'a'
+            }
+            .to_string(),
             "invalid character class range 'z-a'"
         );
     }

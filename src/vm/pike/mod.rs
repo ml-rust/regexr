@@ -26,9 +26,9 @@
 //! - BinaryHeap scheduling: Efficient backref handling with min-heap
 //! - Arc<Nfa> for lookarounds: Avoids expensive NFA cloning
 
-pub(crate) mod shared;
 mod engine;
 pub mod interpreter;
+pub(crate) mod shared;
 
 // Re-exports
 pub use engine::PikeVmEngine;

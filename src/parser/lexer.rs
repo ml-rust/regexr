@@ -316,18 +316,30 @@ impl<'a> Lexer<'a> {
 
         for _ in 0..2 {
             let (_, c) = self.next_char().ok_or_else(|| {
-                Error::with_span(ErrorKind::InvalidHexEscape, self.src, Span::new(start, self.pos))
+                Error::with_span(
+                    ErrorKind::InvalidHexEscape,
+                    self.src,
+                    Span::new(start, self.pos),
+                )
             })?;
 
             let digit = c.to_digit(16).ok_or_else(|| {
-                Error::with_span(ErrorKind::InvalidHexEscape, self.src, Span::new(start, self.pos))
+                Error::with_span(
+                    ErrorKind::InvalidHexEscape,
+                    self.src,
+                    Span::new(start, self.pos),
+                )
             })?;
 
             value = value * 16 + digit;
         }
 
         char::from_u32(value).ok_or_else(|| {
-            Error::with_span(ErrorKind::InvalidHexEscape, self.src, Span::new(start, self.pos))
+            Error::with_span(
+                ErrorKind::InvalidHexEscape,
+                self.src,
+                Span::new(start, self.pos),
+            )
         })
     }
 
@@ -609,7 +621,9 @@ mod tests {
         let tokens = lex_all(r"\p{Letter}").unwrap();
         assert_eq!(
             tokens,
-            vec![TokenKind::Escape(EscapeKind::UnicodeProperty("Letter".to_string()))]
+            vec![TokenKind::Escape(EscapeKind::UnicodeProperty(
+                "Letter".to_string()
+            ))]
         );
     }
 
@@ -618,7 +632,9 @@ mod tests {
         let tokens = lex_all(r"\P{Number}").unwrap();
         assert_eq!(
             tokens,
-            vec![TokenKind::Escape(EscapeKind::NotUnicodeProperty("Number".to_string()))]
+            vec![TokenKind::Escape(EscapeKind::NotUnicodeProperty(
+                "Number".to_string()
+            ))]
         );
     }
 
@@ -627,7 +643,9 @@ mod tests {
         let tokens = lex_all(r"\p{L}").unwrap();
         assert_eq!(
             tokens,
-            vec![TokenKind::Escape(EscapeKind::UnicodeProperty("L".to_string()))]
+            vec![TokenKind::Escape(EscapeKind::UnicodeProperty(
+                "L".to_string()
+            ))]
         );
     }
 

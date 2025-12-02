@@ -14,7 +14,7 @@ fn test_word_boundary_at_start() {
     let re = regex(r"\bword");
     assert!(re.is_match("word"));
     assert!(re.is_match("word is here"));
-    assert!(!re.is_match("sword"));  // 's' is a word char, no boundary
+    assert!(!re.is_match("sword")); // 's' is a word char, no boundary
 }
 
 #[test]
@@ -22,7 +22,7 @@ fn test_word_boundary_at_end() {
     let re = regex(r"word\b");
     assert!(re.is_match("word"));
     assert!(re.is_match("this is a word"));
-    assert!(!re.is_match("words"));  // 's' is a word char, no boundary
+    assert!(!re.is_match("words")); // 's' is a word char, no boundary
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn test_word_boundary_with_punctuation() {
     assert!(re.is_match(".foo"));
     assert!(re.is_match("foo!"));
     assert!(re.is_match("(foo)"));
-    assert!(re.is_match("foo,bar"));  // matches "foo"
+    assert!(re.is_match("foo,bar")); // matches "foo"
 }
 
 #[test]
@@ -74,8 +74,8 @@ fn test_word_boundary_find_position() {
 fn test_non_word_boundary_basic() {
     let re = regex(r"\Bword");
     // \B matches where there is NOT a word boundary
-    assert!(re.is_match("sword"));  // 's' is word char, 'w' is word char - no boundary
-    assert!(!re.is_match("word"));  // start of string is a boundary
+    assert!(re.is_match("sword")); // 's' is word char, 'w' is word char - no boundary
+    assert!(!re.is_match("word")); // start of string is a boundary
     assert!(!re.is_match(" word")); // space to word is a boundary
 }
 
@@ -90,10 +90,10 @@ fn test_non_word_boundary_end() {
 #[test]
 fn test_non_word_boundary_both_sides() {
     let re = regex(r"\Bor\B");
-    assert!(re.is_match("word"));    // w-or-d: both sides are word chars
+    assert!(re.is_match("word")); // w-or-d: both sides are word chars
     assert!(re.is_match("world"));
-    assert!(!re.is_match("or"));     // start/end boundaries
-    assert!(!re.is_match("for"));    // 'f' to 'o' is not boundary, but 'r' to end is
+    assert!(!re.is_match("or")); // start/end boundaries
+    assert!(!re.is_match("for")); // 'f' to 'o' is not boundary, but 'r' to end is
 }
 
 // =============================================================================
@@ -120,8 +120,8 @@ fn test_word_boundary_with_numbers() {
     let re = regex(r"\b\d+\b");
     assert!(re.is_match("123"));
     assert!(re.is_match("foo 123 bar"));
-    assert!(!re.is_match("foo123"));  // no boundary before '1'
-    assert!(!re.is_match("123bar"));  // no boundary after '3'
+    assert!(!re.is_match("foo123")); // no boundary before '1'
+    assert!(!re.is_match("123bar")); // no boundary after '3'
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn test_word_boundary_alternation() {
     assert!(re.is_match("bar"));
     assert!(re.is_match("a foo b"));
     assert!(re.is_match("a bar b"));
-    assert!(!re.is_match("foobar"));  // word boundary between foo and bar fails
+    assert!(!re.is_match("foobar")); // word boundary between foo and bar fails
     assert!(!re.is_match("afoo"));
 }
 
@@ -176,10 +176,7 @@ mod jit_word_boundary {
 
     #[test]
     fn test_jit_word_boundary_basic() {
-        let re = RegexBuilder::new(r"\btest\b")
-            .jit(true)
-            .build()
-            .unwrap();
+        let re = RegexBuilder::new(r"\btest\b").jit(true).build().unwrap();
 
         assert!(re.is_match("test"));
         assert!(re.is_match("a test b"));
@@ -189,21 +186,15 @@ mod jit_word_boundary {
 
     #[test]
     fn test_jit_non_word_boundary() {
-        let re = RegexBuilder::new(r"\Btest")
-            .jit(true)
-            .build()
-            .unwrap();
+        let re = RegexBuilder::new(r"\Btest").jit(true).build().unwrap();
 
-        assert!(re.is_match("attest"));  // 'a' to 't' - both word chars
-        assert!(!re.is_match("test"));   // start is a boundary
+        assert!(re.is_match("attest")); // 'a' to 't' - both word chars
+        assert!(!re.is_match("test")); // start is a boundary
     }
 
     #[test]
     fn test_jit_word_boundary_captures() {
-        let re = RegexBuilder::new(r"\b(\w+)\b")
-            .jit(true)
-            .build()
-            .unwrap();
+        let re = RegexBuilder::new(r"\b(\w+)\b").jit(true).build().unwrap();
 
         let caps = re.captures("hello world").unwrap();
         assert_eq!(&caps[1], "hello");
@@ -211,10 +202,7 @@ mod jit_word_boundary {
 
     #[test]
     fn test_jit_word_boundary_find() {
-        let re = RegexBuilder::new(r"\bfoo\b")
-            .jit(true)
-            .build()
-            .unwrap();
+        let re = RegexBuilder::new(r"\bfoo\b").jit(true).build().unwrap();
 
         let m = re.find("say foo bar").unwrap();
         assert_eq!(m.start(), 4);

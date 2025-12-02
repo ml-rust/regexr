@@ -2,8 +2,8 @@
 //!
 //! Run with: cargo run --example profile_cl100k --release --features jit
 
-use std::time::{Duration, Instant};
 use pcre2::bytes::RegexBuilder as Pcre2Builder;
+use std::time::{Duration, Instant};
 
 // cl100k_base pattern from OpenAI's tiktoken
 const CL100K_PATTERN: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
@@ -59,7 +59,10 @@ where
     let elapsed = start.elapsed();
     let per_iter = elapsed / iterations;
 
-    println!("{}: {:?} total, {:?}/iter ({} iters)", name, elapsed, per_iter, iterations);
+    println!(
+        "{}: {:?} total, {:?}/iter ({} iters)",
+        name, elapsed, per_iter, iterations
+    );
     elapsed
 }
 
@@ -72,8 +75,12 @@ fn main() {
     let text_10kb = generate_large_text(SAMPLE_TEXT, 10 * 1024);
     let text_100kb = generate_large_text(SAMPLE_TEXT, 100 * 1024);
 
-    println!("Test data sizes: 1KB={}, 10KB={}, 100KB={}\n",
-             text_1kb.len(), text_10kb.len(), text_100kb.len());
+    println!(
+        "Test data sizes: 1KB={}, 10KB={}, 100KB={}\n",
+        text_1kb.len(),
+        text_10kb.len(),
+        text_100kb.len()
+    );
 
     // Compile patterns
     println!("--- Compilation Time ---");
@@ -168,57 +175,120 @@ fn main() {
     // Component 1: Contractions (case-insensitive alternation)
     let p1 = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)";
     let re1 = regexr::RegexBuilder::new(p1).jit(true).build().unwrap();
-    let pc1 = Pcre2Builder::new().utf(true).ucp(true).jit_if_available(true).build(p1).unwrap();
-    bench_iterations("contractions regexr", 100, || { let _: usize = re1.find_iter(&text_10kb).count(); });
-    bench_iterations("contractions pcre2 ", 100, || { let _: usize = pc1.find_iter(text_10kb.as_bytes()).count(); });
+    let pc1 = Pcre2Builder::new()
+        .utf(true)
+        .ucp(true)
+        .jit_if_available(true)
+        .build(p1)
+        .unwrap();
+    bench_iterations("contractions regexr", 100, || {
+        let _: usize = re1.find_iter(&text_10kb).count();
+    });
+    bench_iterations("contractions pcre2 ", 100, || {
+        let _: usize = pc1.find_iter(text_10kb.as_bytes()).count();
+    });
 
     // Component 2: Unicode letter sequence
     let p2 = r"\p{L}+";
     let re2 = regexr::RegexBuilder::new(p2).jit(true).build().unwrap();
-    let pc2 = Pcre2Builder::new().utf(true).ucp(true).jit_if_available(true).build(p2).unwrap();
+    let pc2 = Pcre2Builder::new()
+        .utf(true)
+        .ucp(true)
+        .jit_if_available(true)
+        .build(p2)
+        .unwrap();
     println!();
-    bench_iterations("\\p{L}+ regexr     ", 100, || { let _: usize = re2.find_iter(&text_10kb).count(); });
-    bench_iterations("\\p{L}+ pcre2      ", 100, || { let _: usize = pc2.find_iter(text_10kb.as_bytes()).count(); });
+    bench_iterations("\\p{L}+ regexr     ", 100, || {
+        let _: usize = re2.find_iter(&text_10kb).count();
+    });
+    bench_iterations("\\p{L}+ pcre2      ", 100, || {
+        let _: usize = pc2.find_iter(text_10kb.as_bytes()).count();
+    });
 
     // Component 3: Unicode number sequence
     let p3 = r"\p{N}{1,3}";
     let re3 = regexr::RegexBuilder::new(p3).jit(true).build().unwrap();
-    let pc3 = Pcre2Builder::new().utf(true).ucp(true).jit_if_available(true).build(p3).unwrap();
+    let pc3 = Pcre2Builder::new()
+        .utf(true)
+        .ucp(true)
+        .jit_if_available(true)
+        .build(p3)
+        .unwrap();
     println!();
-    bench_iterations("\\p{N}{1,3} regexr ", 100, || { let _: usize = re3.find_iter(&text_10kb).count(); });
-    bench_iterations("\\p{N}{1,3} pcre2  ", 100, || { let _: usize = pc3.find_iter(text_10kb.as_bytes()).count(); });
+    bench_iterations("\\p{N}{1,3} regexr ", 100, || {
+        let _: usize = re3.find_iter(&text_10kb).count();
+    });
+    bench_iterations("\\p{N}{1,3} pcre2  ", 100, || {
+        let _: usize = pc3.find_iter(text_10kb.as_bytes()).count();
+    });
 
     // Component 4: Whitespace with negative lookahead
     let p4 = r"\s+(?!\S)";
     let re4 = regexr::RegexBuilder::new(p4).jit(true).build().unwrap();
-    let pc4 = Pcre2Builder::new().utf(true).ucp(true).jit_if_available(true).build(p4).unwrap();
+    let pc4 = Pcre2Builder::new()
+        .utf(true)
+        .ucp(true)
+        .jit_if_available(true)
+        .build(p4)
+        .unwrap();
     println!();
-    bench_iterations("\\s+(?!\\S) regexr ", 100, || { let _: usize = re4.find_iter(&text_10kb).count(); });
-    bench_iterations("\\s+(?!\\S) pcre2  ", 100, || { let _: usize = pc4.find_iter(text_10kb.as_bytes()).count(); });
+    bench_iterations("\\s+(?!\\S) regexr ", 100, || {
+        let _: usize = re4.find_iter(&text_10kb).count();
+    });
+    bench_iterations("\\s+(?!\\S) pcre2  ", 100, || {
+        let _: usize = pc4.find_iter(text_10kb.as_bytes()).count();
+    });
 
     // Component 5: Simple whitespace (no lookahead)
     let p5 = r"\s+";
     let re5 = regexr::RegexBuilder::new(p5).jit(true).build().unwrap();
-    let pc5 = Pcre2Builder::new().utf(true).ucp(true).jit_if_available(true).build(p5).unwrap();
+    let pc5 = Pcre2Builder::new()
+        .utf(true)
+        .ucp(true)
+        .jit_if_available(true)
+        .build(p5)
+        .unwrap();
     println!();
-    bench_iterations("\\s+ regexr        ", 100, || { let _: usize = re5.find_iter(&text_10kb).count(); });
-    bench_iterations("\\s+ pcre2         ", 100, || { let _: usize = pc5.find_iter(text_10kb.as_bytes()).count(); });
+    bench_iterations("\\s+ regexr        ", 100, || {
+        let _: usize = re5.find_iter(&text_10kb).count();
+    });
+    bench_iterations("\\s+ pcre2         ", 100, || {
+        let _: usize = pc5.find_iter(text_10kb.as_bytes()).count();
+    });
 
     // Component 6: Newlines
     let p6 = r"\s*[\r\n]+";
     let re6 = regexr::RegexBuilder::new(p6).jit(true).build().unwrap();
-    let pc6 = Pcre2Builder::new().utf(true).ucp(true).jit_if_available(true).build(p6).unwrap();
+    let pc6 = Pcre2Builder::new()
+        .utf(true)
+        .ucp(true)
+        .jit_if_available(true)
+        .build(p6)
+        .unwrap();
     println!();
-    bench_iterations("\\s*[\\r\\n]+ regexr", 100, || { let _: usize = re6.find_iter(&text_10kb).count(); });
-    bench_iterations("\\s*[\\r\\n]+ pcre2 ", 100, || { let _: usize = pc6.find_iter(text_10kb.as_bytes()).count(); });
+    bench_iterations("\\s*[\\r\\n]+ regexr", 100, || {
+        let _: usize = re6.find_iter(&text_10kb).count();
+    });
+    bench_iterations("\\s*[\\r\\n]+ pcre2 ", 100, || {
+        let _: usize = pc6.find_iter(text_10kb.as_bytes()).count();
+    });
 
     // Component 7: Optional + Unicode letter
     let p7 = r"[^\r\n\p{L}\p{N}]?\p{L}+";
     let re7 = regexr::RegexBuilder::new(p7).jit(true).build().unwrap();
-    let pc7 = Pcre2Builder::new().utf(true).ucp(true).jit_if_available(true).build(p7).unwrap();
+    let pc7 = Pcre2Builder::new()
+        .utf(true)
+        .ucp(true)
+        .jit_if_available(true)
+        .build(p7)
+        .unwrap();
     println!();
-    bench_iterations("[^...]?\\p{L}+ regexr", 100, || { let _: usize = re7.find_iter(&text_10kb).count(); });
-    bench_iterations("[^...]?\\p{L}+ pcre2 ", 100, || { let _: usize = pc7.find_iter(text_10kb.as_bytes()).count(); });
+    bench_iterations("[^...]?\\p{L}+ regexr", 100, || {
+        let _: usize = re7.find_iter(&text_10kb).count();
+    });
+    bench_iterations("[^...]?\\p{L}+ pcre2 ", 100, || {
+        let _: usize = pc7.find_iter(text_10kb.as_bytes()).count();
+    });
 
     // Throughput calculation
     println!("\n--- Throughput Summary ---");

@@ -201,7 +201,10 @@ impl ByteRange {
 
     /// Creates a range for a single byte.
     pub fn single(byte: u8) -> Self {
-        Self { start: byte, end: byte }
+        Self {
+            start: byte,
+            end: byte,
+        }
     }
 
     /// Creates a range matching any byte.

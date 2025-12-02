@@ -7,7 +7,7 @@ use crate::error::{Error, ErrorKind, Result};
 use crate::hir::CodepointClass;
 use crate::nfa::{ByteClass, ByteRange, Nfa, NfaInstruction, StateId};
 
-use super::super::{NfaLiveness, TaggedNfaContext, PatternStep};
+use super::super::{NfaLiveness, PatternStep, TaggedNfaContext};
 use super::jit::TaggedNfaJit;
 
 use dynasmrt::{dynasm, DynasmApi};
@@ -53,7 +53,10 @@ impl TaggedNfaJitCompiler {
         use dynasmrt::DynasmLabelApi;
 
         let mut asm = dynasmrt::x64::Assembler::new().map_err(|e| {
-            Error::new(ErrorKind::Jit(format!("Failed to create assembler: {:?}", e)), "")
+            Error::new(
+                ErrorKind::Jit(format!("Failed to create assembler: {:?}", e)),
+                "",
+            )
         })?;
 
         let state_labels: Vec<_> = (0..nfa.states.len())
@@ -103,23 +106,22 @@ impl TaggedNfaJitCompiler {
                     NfaInstruction::PositiveLookahead(_)
                     | NfaInstruction::NegativeLookahead(_)
                     | NfaInstruction::PositiveLookbehind(_)
-                    | NfaInstruction::NegativeLookbehind(_) => {},
+                    | NfaInstruction::NegativeLookbehind(_) => {}
                     // Anchors are now supported
                     NfaInstruction::StartOfText
                     | NfaInstruction::EndOfText
                     | NfaInstruction::StartOfLine
-                    | NfaInstruction::EndOfLine => {},
+                    | NfaInstruction::EndOfLine => {}
                     // Backref is now supported - handled in compile_full()
-                    NfaInstruction::Backref(_) => {},
+                    NfaInstruction::Backref(_) => {}
                     // Word boundary and non-greedy are handled by pattern extraction
                     NfaInstruction::WordBoundary
                     | NfaInstruction::NotWordBoundary
-                    | NfaInstruction::NonGreedyExit => {},
+                    | NfaInstruction::NonGreedyExit => {}
                     // Capture instructions are supported
-                    NfaInstruction::CaptureStart(_)
-                    | NfaInstruction::CaptureEnd(_) => {},
+                    NfaInstruction::CaptureStart(_) | NfaInstruction::CaptureEnd(_) => {}
                     // Codepoint class is handled by pattern extraction
-                    NfaInstruction::CodepointClass(_, _) => {},
+                    NfaInstruction::CodepointClass(_, _) => {}
                 }
             }
         }
@@ -211,18 +213,17 @@ impl TaggedNfaJitCompiler {
                         }
                     }
                     // Non-greedy patterns not supported in alternation JIT
-                    PatternStep::NonGreedyPlus(_, _) |
-                    PatternStep::NonGreedyStar(_, _) => {
+                    PatternStep::NonGreedyPlus(_, _) | PatternStep::NonGreedyStar(_, _) => {
                         return true;
                     }
                     // Greedy with lookahead - supported via emit_alt_step
-                    PatternStep::GreedyPlusLookahead(_, _, _) |
-                    PatternStep::GreedyStarLookahead(_, _, _) => {}
+                    PatternStep::GreedyPlusLookahead(_, _, _)
+                    | PatternStep::GreedyStarLookahead(_, _, _) => {}
                     // Lookarounds in alternation - not yet supported
-                    PatternStep::PositiveLookahead(_) |
-                    PatternStep::NegativeLookahead(_) |
-                    PatternStep::PositiveLookbehind(_, _) |
-                    PatternStep::NegativeLookbehind(_, _) => {
+                    PatternStep::PositiveLookahead(_)
+                    | PatternStep::NegativeLookahead(_)
+                    | PatternStep::PositiveLookbehind(_, _)
+                    | PatternStep::NegativeLookbehind(_, _) => {
                         return true;
                     }
                     _ => {}
@@ -235,36 +236,38 @@ impl TaggedNfaJitCompiler {
     /// Check if a step consumes input bytes.
     fn step_consumes_input(step: &PatternStep) -> bool {
         match step {
-            PatternStep::Byte(_) |
-            PatternStep::ByteClass(_) |
-            PatternStep::GreedyPlus(_) |
-            PatternStep::GreedyStar(_) |
-            PatternStep::GreedyCodepointPlus(_) |
-            PatternStep::CodepointClass(_, _) |
-            PatternStep::NonGreedyPlus(_, _) |
-            PatternStep::NonGreedyStar(_, _) |
-            PatternStep::GreedyPlusLookahead(_, _, _) |
-            PatternStep::GreedyStarLookahead(_, _, _) |
-            PatternStep::Backref(_) => true,
+            PatternStep::Byte(_)
+            | PatternStep::ByteClass(_)
+            | PatternStep::GreedyPlus(_)
+            | PatternStep::GreedyStar(_)
+            | PatternStep::GreedyCodepointPlus(_)
+            | PatternStep::CodepointClass(_, _)
+            | PatternStep::NonGreedyPlus(_, _)
+            | PatternStep::NonGreedyStar(_, _)
+            | PatternStep::GreedyPlusLookahead(_, _, _)
+            | PatternStep::GreedyStarLookahead(_, _, _)
+            | PatternStep::Backref(_) => true,
 
             PatternStep::Alt(alternatives) => {
                 // Consumes input if any alternative consumes input
-                alternatives.iter().any(|alt| alt.iter().any(|s| Self::step_consumes_input(s)))
+                alternatives
+                    .iter()
+                    .any(|alt| alt.iter().any(|s| Self::step_consumes_input(s)))
             }
 
             // Zero-width assertions don't consume input
-            PatternStep::PositiveLookahead(_) |
-            PatternStep::NegativeLookahead(_) |
-            PatternStep::PositiveLookbehind(_, _) |
-            PatternStep::NegativeLookbehind(_, _) |
-            PatternStep::WordBoundary |
-            PatternStep::NotWordBoundary |
-            PatternStep::StartOfText |
-            PatternStep::EndOfText |
-            PatternStep::StartOfLine |
-            PatternStep::EndOfLine |
-            PatternStep::CaptureStart(_) |
-            PatternStep::CaptureEnd(_) => false,
+            PatternStep::PositiveLookahead(_)
+            | PatternStep::NegativeLookahead(_)
+            | PatternStep::PositiveLookbehind(_, _)
+            | PatternStep::NegativeLookbehind(_, _)
+            | PatternStep::WordBoundary
+            | PatternStep::NotWordBoundary
+            | PatternStep::StartOfText
+            | PatternStep::EndOfText
+            | PatternStep::StartOfLine
+            | PatternStep::EndOfLine
+            | PatternStep::CaptureStart(_)
+            | PatternStep::CaptureEnd(_) => false,
         }
     }
 
@@ -388,7 +391,11 @@ impl TaggedNfaJitCompiler {
 
                     if needs_backtrack {
                         // Backtracking version: greedily match, then try remaining, backtrack on failure
-                        self.emit_greedy_plus_with_backtracking(&byte_class.ranges, remaining, byte_mismatch)?;
+                        self.emit_greedy_plus_with_backtracking(
+                            &byte_class.ranges,
+                            remaining,
+                            byte_mismatch,
+                        )?;
                         // Remaining steps already handled in backtracking code
                         break;
                     } else {
@@ -427,7 +434,11 @@ impl TaggedNfaJitCompiler {
 
                     if needs_backtrack {
                         // Backtracking version
-                        self.emit_greedy_star_with_backtracking(&byte_class.ranges, remaining, byte_mismatch)?;
+                        self.emit_greedy_star_with_backtracking(
+                            &byte_class.ranges,
+                            remaining,
+                            byte_mismatch,
+                        )?;
                         break;
                     } else {
                         // Simple version: no backtracking needed
@@ -524,12 +535,22 @@ impl TaggedNfaJitCompiler {
                 PatternStep::GreedyPlusLookahead(byte_class, lookahead_steps, is_positive) => {
                     // Greedy one-or-more with lookahead: greedily consume, then backtrack
                     // until the lookahead succeeds.
-                    self.emit_greedy_plus_with_lookahead(&byte_class.ranges, lookahead_steps, *is_positive, byte_mismatch)?;
+                    self.emit_greedy_plus_with_lookahead(
+                        &byte_class.ranges,
+                        lookahead_steps,
+                        *is_positive,
+                        byte_mismatch,
+                    )?;
                 }
                 PatternStep::GreedyStarLookahead(byte_class, lookahead_steps, is_positive) => {
                     // Greedy zero-or-more with lookahead: greedily consume, then backtrack
                     // until the lookahead succeeds.
-                    self.emit_greedy_star_with_lookahead(&byte_class.ranges, lookahead_steps, *is_positive, byte_mismatch)?;
+                    self.emit_greedy_star_with_lookahead(
+                        &byte_class.ranges,
+                        lookahead_steps,
+                        *is_positive,
+                        byte_mismatch,
+                    )?;
                 }
                 PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_) => {
                     // Capture markers don't consume input - skip in find_fn
@@ -546,7 +567,11 @@ impl TaggedNfaJitCompiler {
 
                     if needs_backtrack {
                         // Backtracking version: greedily match UTF-8, then try remaining, backtrack on failure
-                        self.emit_greedy_codepoint_plus_with_backtracking(cpclass, remaining, byte_mismatch)?;
+                        self.emit_greedy_codepoint_plus_with_backtracking(
+                            cpclass,
+                            remaining,
+                            byte_mismatch,
+                        )?;
                         break;
                     } else {
                         // Simple version: no backtracking needed
@@ -779,10 +804,10 @@ impl TaggedNfaJitCompiler {
                                         ; =>at_end
                                     );
                                 }
-                                PatternStep::PositiveLookahead(_) |
-                                PatternStep::NegativeLookahead(_) |
-                                PatternStep::PositiveLookbehind(..) |
-                                PatternStep::NegativeLookbehind(..) => {
+                                PatternStep::PositiveLookahead(_)
+                                | PatternStep::NegativeLookahead(_)
+                                | PatternStep::PositiveLookbehind(..)
+                                | PatternStep::NegativeLookbehind(..) => {
                                     // Lookarounds in alternation - fall back to interpreter
                                     return self.compile_with_fallback(None);
                                 }
@@ -790,17 +815,36 @@ impl TaggedNfaJitCompiler {
                                     // Backrefs in find_fn are handled by early return above
                                     unreachable!("Backref in find_fn alternation should have triggered early return");
                                 }
-                                PatternStep::NonGreedyPlus(_, _) | PatternStep::NonGreedyStar(_, _) => {
+                                PatternStep::NonGreedyPlus(_, _)
+                                | PatternStep::NonGreedyStar(_, _) => {
                                     // Non-greedy in alternation - complex, fall back to interpreter
                                     return self.compile_with_fallback(None);
                                 }
-                                PatternStep::GreedyPlusLookahead(byte_class, lookahead_steps, is_positive) => {
+                                PatternStep::GreedyPlusLookahead(
+                                    byte_class,
+                                    lookahead_steps,
+                                    is_positive,
+                                ) => {
                                     // Greedy+ with lookahead in alternation
-                                    self.emit_greedy_plus_with_lookahead_in_alt(&byte_class.ranges, lookahead_steps, *is_positive, try_next_alt)?;
+                                    self.emit_greedy_plus_with_lookahead_in_alt(
+                                        &byte_class.ranges,
+                                        lookahead_steps,
+                                        *is_positive,
+                                        try_next_alt,
+                                    )?;
                                 }
-                                PatternStep::GreedyStarLookahead(byte_class, lookahead_steps, is_positive) => {
+                                PatternStep::GreedyStarLookahead(
+                                    byte_class,
+                                    lookahead_steps,
+                                    is_positive,
+                                ) => {
                                     // Greedy* with lookahead in alternation
-                                    self.emit_greedy_star_with_lookahead_in_alt(&byte_class.ranges, lookahead_steps, *is_positive, try_next_alt)?;
+                                    self.emit_greedy_star_with_lookahead_in_alt(
+                                        &byte_class.ranges,
+                                        lookahead_steps,
+                                        *is_positive,
+                                        try_next_alt,
+                                    )?;
                                 }
                             }
                         }
@@ -874,7 +918,9 @@ impl TaggedNfaJitCompiler {
         // captures_fn - generates captures with proper capture tracking
         // =====================================================================
         // Check if pattern has captures
-        let has_captures = steps.iter().any(|s| matches!(s, PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_)));
+        let has_captures = steps
+            .iter()
+            .any(|s| matches!(s, PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_)));
 
         let captures_offset = if has_captures {
             // Generate full captures_fn with capture tracking
@@ -896,7 +942,11 @@ impl TaggedNfaJitCompiler {
 
     /// Emits range check code for character classes.
     /// Jumps to `fail_label` if the byte in `al` doesn't match any range.
-    fn emit_range_check(&mut self, ranges: &[ByteRange], fail_label: dynasmrt::DynamicLabel) -> Result<()> {
+    fn emit_range_check(
+        &mut self,
+        ranges: &[ByteRange],
+        fail_label: dynasmrt::DynamicLabel,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
 
         if ranges.len() == 1 {
@@ -1154,10 +1204,10 @@ impl TaggedNfaJitCompiler {
                     ; =>at_end
                 );
             }
-            PatternStep::PositiveLookahead(_) |
-            PatternStep::NegativeLookahead(_) |
-            PatternStep::PositiveLookbehind(_, _) |
-            PatternStep::NegativeLookbehind(_, _) => {
+            PatternStep::PositiveLookahead(_)
+            | PatternStep::NegativeLookahead(_)
+            | PatternStep::PositiveLookbehind(_, _)
+            | PatternStep::NegativeLookbehind(_, _) => {
                 // Lookarounds in alternation - should have been filtered by has_unsupported_in_alt
                 return Err(Error::new(
                     ErrorKind::Jit("Lookaround in alternation not yet supported".to_string()),
@@ -1167,7 +1217,9 @@ impl TaggedNfaJitCompiler {
             PatternStep::Backref(_) => {
                 // Backrefs in find_fn should have triggered early return
                 return Err(Error::new(
-                    ErrorKind::Jit("Backref in alternation not yet supported in find_fn".to_string()),
+                    ErrorKind::Jit(
+                        "Backref in alternation not yet supported in find_fn".to_string(),
+                    ),
                     "",
                 ));
             }
@@ -1180,11 +1232,21 @@ impl TaggedNfaJitCompiler {
             }
             PatternStep::GreedyPlusLookahead(byte_class, lookahead_steps, is_positive) => {
                 // Greedy one-or-more with lookahead in alternation
-                self.emit_greedy_plus_with_lookahead_in_alt(&byte_class.ranges, lookahead_steps, *is_positive, fail_label)?;
+                self.emit_greedy_plus_with_lookahead_in_alt(
+                    &byte_class.ranges,
+                    lookahead_steps,
+                    *is_positive,
+                    fail_label,
+                )?;
             }
             PatternStep::GreedyStarLookahead(byte_class, lookahead_steps, is_positive) => {
                 // Greedy zero-or-more with lookahead in alternation
-                self.emit_greedy_star_with_lookahead_in_alt(&byte_class.ranges, lookahead_steps, *is_positive, fail_label)?;
+                self.emit_greedy_star_with_lookahead_in_alt(
+                    &byte_class.ranges,
+                    lookahead_steps,
+                    *is_positive,
+                    fail_label,
+                )?;
             }
         }
         Ok(())
@@ -1515,7 +1577,11 @@ impl TaggedNfaJitCompiler {
     /// Emits code to check if a byte is a word character.
     /// Sets ZF (zero flag) if it IS a word char, clears ZF if not.
     /// Uses al as input, clobbers cl.
-    fn emit_is_word_char(&mut self, word_char_label: dynasmrt::DynamicLabel, not_word_char_label: dynasmrt::DynamicLabel) {
+    fn emit_is_word_char(
+        &mut self,
+        word_char_label: dynasmrt::DynamicLabel,
+        not_word_char_label: dynasmrt::DynamicLabel,
+    ) {
         use dynasmrt::DynasmLabelApi;
         // Word characters: [a-zA-Z0-9_]
         // Check ranges: a-z (0x61-0x7a), A-Z (0x41-0x5a), 0-9 (0x30-0x39), _ (0x5f)
@@ -1550,7 +1616,11 @@ impl TaggedNfaJitCompiler {
     /// Emits code to check word boundary.
     /// rbx = input_ptr, r14 = current_pos, r12 = input_len
     /// Jumps to fail_label if the word boundary condition is not met.
-    fn emit_word_boundary_check(&mut self, fail_label: dynasmrt::DynamicLabel, is_boundary: bool) -> Result<()> {
+    fn emit_word_boundary_check(
+        &mut self,
+        fail_label: dynasmrt::DynamicLabel,
+        is_boundary: bool,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
 
         // Word boundary is at position where:
@@ -1674,7 +1744,10 @@ impl TaggedNfaJitCompiler {
                         );
                     }
                     PatternStep::Byte(byte) => {
-                        let final_ranges = vec![ByteRange { start: *byte, end: *byte }];
+                        let final_ranges = vec![ByteRange {
+                            start: *byte,
+                            end: *byte,
+                        }];
                         return self.emit_greedy_plus_with_star_scan_lookahead(
                             ranges,
                             &star_byte_class.ranges,
@@ -1979,7 +2052,10 @@ impl TaggedNfaJitCompiler {
                         );
                     }
                     PatternStep::Byte(byte) => {
-                        let final_ranges = vec![ByteRange { start: *byte, end: *byte }];
+                        let final_ranges = vec![ByteRange {
+                            start: *byte,
+                            end: *byte,
+                        }];
                         return self.emit_greedy_star_with_star_scan_lookahead(
                             ranges,
                             &star_byte_class.ranges,
@@ -2652,7 +2728,10 @@ impl TaggedNfaJitCompiler {
             _ => {
                 // Unsupported step - return error
                 return Err(crate::error::Error::new(
-                    crate::error::ErrorKind::Jit(format!("Unsupported step in backtracking: {:?}", step)),
+                    crate::error::ErrorKind::Jit(format!(
+                        "Unsupported step in backtracking: {:?}",
+                        step
+                    )),
                     "",
                 ));
             }
@@ -2694,7 +2773,10 @@ impl TaggedNfaJitCompiler {
                     }
                     PatternStep::Byte(byte) => {
                         // Convert single byte to a range for uniform handling
-                        let final_ranges = vec![ByteRange { start: *byte, end: *byte }];
+                        let final_ranges = vec![ByteRange {
+                            start: *byte,
+                            end: *byte,
+                        }];
                         return self.emit_lookahead_star_scan(
                             &star_byte_class.ranges,
                             &final_ranges,
@@ -2752,7 +2834,11 @@ impl TaggedNfaJitCompiler {
                         );
                         // Use a temp label for range check failure
                         let range_fail = self.asm.new_dynamic_label();
-                        self.emit_range_check_with_label(&byte_class.ranges, range_fail, fail_label)?;
+                        self.emit_range_check_with_label(
+                            &byte_class.ranges,
+                            range_fail,
+                            fail_label,
+                        )?;
                         dynasm!(self.asm
                             ; inc r9
                         );
@@ -2763,7 +2849,11 @@ impl TaggedNfaJitCompiler {
                             ; movzx eax, BYTE [rbx + r9]
                         );
                         let range_fail = self.asm.new_dynamic_label();
-                        self.emit_range_check_with_label(&byte_class.ranges, range_fail, inner_match)?;
+                        self.emit_range_check_with_label(
+                            &byte_class.ranges,
+                            range_fail,
+                            inner_match,
+                        )?;
                         dynasm!(self.asm
                             ; inc r9
                         );
@@ -3270,7 +3360,12 @@ impl TaggedNfaJitCompiler {
         // The captures path and alternation path use the same register conventions:
         // r14 = current position, rbx = input base, r12 = input length
         // So we can reuse the alternation implementation directly.
-        self.emit_greedy_plus_with_lookahead_in_alt(ranges, lookahead_steps, is_positive, fail_label)
+        self.emit_greedy_plus_with_lookahead_in_alt(
+            ranges,
+            lookahead_steps,
+            is_positive,
+            fail_label,
+        )
     }
 
     /// Emits greedy* with lookahead for the captures path.
@@ -3285,7 +3380,12 @@ impl TaggedNfaJitCompiler {
         // The captures path and alternation path use the same register conventions:
         // r14 = current position, rbx = input base, r12 = input length
         // So we can reuse the alternation implementation directly.
-        self.emit_greedy_star_with_lookahead_in_alt(ranges, lookahead_steps, is_positive, fail_label)
+        self.emit_greedy_star_with_lookahead_in_alt(
+            ranges,
+            lookahead_steps,
+            is_positive,
+            fail_label,
+        )
     }
 
     /// Emits code to decode one UTF-8 codepoint from input.
@@ -3510,7 +3610,10 @@ impl TaggedNfaJitCompiler {
 
         // Helper function that checks membership
         // Must use extern "sysv64" for System V AMD64 ABI
-        extern "sysv64" fn check_membership(codepoint: u32, cpclass: *const CodepointClass) -> bool {
+        extern "sysv64" fn check_membership(
+            codepoint: u32,
+            cpclass: *const CodepointClass,
+        ) -> bool {
             let cpclass = unsafe { &*cpclass };
             cpclass.contains(codepoint)
         }
@@ -3738,10 +3841,14 @@ impl TaggedNfaJitCompiler {
 
         // Count max capture group index
         // Note: capture indices are 1-based (group 0 is the full match)
-        let max_capture_idx = steps.iter().filter_map(|s| match s {
-            PatternStep::CaptureStart(idx) | PatternStep::CaptureEnd(idx) => Some(*idx),
-            _ => None,
-        }).max().unwrap_or(0);
+        let max_capture_idx = steps
+            .iter()
+            .filter_map(|s| match s {
+                PatternStep::CaptureStart(idx) | PatternStep::CaptureEnd(idx) => Some(*idx),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
 
         // Number of slots: (max_capture_idx + 1) groups * 2 slots each
         // This includes group 0 (full match) since max_capture_idx >= 1 for patterns with captures
@@ -3862,7 +3969,12 @@ impl TaggedNfaJitCompiler {
     }
 
     /// Emits code for a single pattern step with capture handling.
-    fn emit_capture_step(&mut self, step: &PatternStep, fail_label: dynasmrt::DynamicLabel, _stack_align: i32) -> Result<()> {
+    fn emit_capture_step(
+        &mut self,
+        step: &PatternStep,
+        fail_label: dynasmrt::DynamicLabel,
+        _stack_align: i32,
+    ) -> Result<()> {
         use dynasmrt::DynasmLabelApi;
 
         match step {
@@ -3958,7 +4070,7 @@ impl TaggedNfaJitCompiler {
                 for (alt_idx, alt_steps) in alternatives.iter().enumerate() {
                     let is_last = alt_idx == alternatives.len() - 1;
                     let try_next_alt = if is_last {
-                        alt_fail  // Jump to our local fail handler that cleans up stack
+                        alt_fail // Jump to our local fail handler that cleans up stack
                     } else {
                         self.asm.new_dynamic_label()
                     };
@@ -4025,11 +4137,21 @@ impl TaggedNfaJitCompiler {
             }
             PatternStep::GreedyPlusLookahead(byte_class, lookahead_steps, is_positive) => {
                 // Greedy+ with lookahead in captures path
-                self.emit_greedy_plus_with_lookahead_in_captures(&byte_class.ranges, lookahead_steps, *is_positive, fail_label)?;
+                self.emit_greedy_plus_with_lookahead_in_captures(
+                    &byte_class.ranges,
+                    lookahead_steps,
+                    *is_positive,
+                    fail_label,
+                )?;
             }
             PatternStep::GreedyStarLookahead(byte_class, lookahead_steps, is_positive) => {
                 // Greedy* with lookahead in captures path
-                self.emit_greedy_star_with_lookahead_in_captures(&byte_class.ranges, lookahead_steps, *is_positive, fail_label)?;
+                self.emit_greedy_star_with_lookahead_in_captures(
+                    &byte_class.ranges,
+                    lookahead_steps,
+                    *is_positive,
+                    fail_label,
+                )?;
             }
             PatternStep::Backref(idx) => {
                 // Backreference: compare captured text with current position
@@ -4251,43 +4373,51 @@ impl TaggedNfaJitCompiler {
 
     /// Calculates the minimum length of input needed to match a pattern.
     fn calc_min_len(steps: &[PatternStep]) -> usize {
-        steps.iter().map(|s| match s {
-            PatternStep::Byte(_) | PatternStep::ByteClass(_) => 1,
-            PatternStep::GreedyPlus(_) => 1,
-            PatternStep::GreedyStar(_) => 0,
-            // Greedy with lookahead: lookahead is zero-width, only repetition counts
-            PatternStep::GreedyPlusLookahead(_, _, _) => 1,
-            PatternStep::GreedyStarLookahead(_, _, _) => 0,
-            // Non-greedy plus needs at least 1 char for the repetition + the suffix
-            PatternStep::NonGreedyPlus(_, suffix) => 1 + Self::calc_min_len(&[(**suffix).clone()]),
-            // Non-greedy star needs 0 for the repetition + the suffix
-            PatternStep::NonGreedyStar(_, suffix) => Self::calc_min_len(&[(**suffix).clone()]),
-            PatternStep::Alt(alternatives) => {
-                // Minimum length is the minimum of all alternatives
-                alternatives.iter()
-                    .map(|alt| Self::calc_min_len(alt))
-                    .min()
-                    .unwrap_or(0)
-            }
-            // Capture markers don't consume input
-            PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_) => 0,
-            // Unicode codepoint classes consume at least 1 byte
-            PatternStep::CodepointClass(_, _) => 1,
-            // Greedy codepoint repetition consumes at least 1 byte (UTF-8 codepoint is 1-4 bytes)
-            PatternStep::GreedyCodepointPlus(_) => 1,
-            // Word boundaries don't consume input - they're zero-width assertions
-            PatternStep::WordBoundary | PatternStep::NotWordBoundary => 0,
-            // Lookarounds don't consume input - they're zero-width assertions
-            PatternStep::PositiveLookahead(_) |
-            PatternStep::NegativeLookahead(_) |
-            PatternStep::PositiveLookbehind(_, _) |
-            PatternStep::NegativeLookbehind(_, _) => 0,
-            // Backrefs consume variable length (unknown at compile time, could be 0)
-            PatternStep::Backref(_) => 0,
-            // Anchors don't consume input - they're zero-width assertions
-            PatternStep::StartOfText | PatternStep::EndOfText |
-            PatternStep::StartOfLine | PatternStep::EndOfLine => 0,
-        }).sum()
+        steps
+            .iter()
+            .map(|s| match s {
+                PatternStep::Byte(_) | PatternStep::ByteClass(_) => 1,
+                PatternStep::GreedyPlus(_) => 1,
+                PatternStep::GreedyStar(_) => 0,
+                // Greedy with lookahead: lookahead is zero-width, only repetition counts
+                PatternStep::GreedyPlusLookahead(_, _, _) => 1,
+                PatternStep::GreedyStarLookahead(_, _, _) => 0,
+                // Non-greedy plus needs at least 1 char for the repetition + the suffix
+                PatternStep::NonGreedyPlus(_, suffix) => {
+                    1 + Self::calc_min_len(&[(**suffix).clone()])
+                }
+                // Non-greedy star needs 0 for the repetition + the suffix
+                PatternStep::NonGreedyStar(_, suffix) => Self::calc_min_len(&[(**suffix).clone()]),
+                PatternStep::Alt(alternatives) => {
+                    // Minimum length is the minimum of all alternatives
+                    alternatives
+                        .iter()
+                        .map(|alt| Self::calc_min_len(alt))
+                        .min()
+                        .unwrap_or(0)
+                }
+                // Capture markers don't consume input
+                PatternStep::CaptureStart(_) | PatternStep::CaptureEnd(_) => 0,
+                // Unicode codepoint classes consume at least 1 byte
+                PatternStep::CodepointClass(_, _) => 1,
+                // Greedy codepoint repetition consumes at least 1 byte (UTF-8 codepoint is 1-4 bytes)
+                PatternStep::GreedyCodepointPlus(_) => 1,
+                // Word boundaries don't consume input - they're zero-width assertions
+                PatternStep::WordBoundary | PatternStep::NotWordBoundary => 0,
+                // Lookarounds don't consume input - they're zero-width assertions
+                PatternStep::PositiveLookahead(_)
+                | PatternStep::NegativeLookahead(_)
+                | PatternStep::PositiveLookbehind(_, _)
+                | PatternStep::NegativeLookbehind(_, _) => 0,
+                // Backrefs consume variable length (unknown at compile time, could be 0)
+                PatternStep::Backref(_) => 0,
+                // Anchors don't consume input - they're zero-width assertions
+                PatternStep::StartOfText
+                | PatternStep::EndOfText
+                | PatternStep::StartOfLine
+                | PatternStep::EndOfLine => 0,
+            })
+            .sum()
     }
 
     /// Combines greedy quantifiers (GreedyPlus/GreedyStar) followed by lookahead
@@ -4534,9 +4664,8 @@ impl TaggedNfaJitCompiler {
                 }
 
                 // Extract the ranges for this step
-                let ranges: Vec<ByteRange> = state.transitions.iter()
-                    .map(|(r, _)| r.clone())
-                    .collect();
+                let ranges: Vec<ByteRange> =
+                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
 
                 // Check if target state forms a loop (greedy or non-greedy)
                 let target_state = &self.nfa.states[target as usize];
@@ -4557,13 +4686,19 @@ impl TaggedNfaJitCompiler {
                     if eps1 == current
                         && marker_state.transitions.is_empty()
                         && marker_state.epsilon.len() == 1
-                        && matches!(marker_state.instruction, Some(NfaInstruction::NonGreedyExit))
+                        && matches!(
+                            marker_state.instruction,
+                            Some(NfaInstruction::NonGreedyExit)
+                        )
                     {
                         // Non-greedy plus pattern detected: a+?
                         // Extract the suffix (what comes after the quantifier)
                         let exit_state = marker_state.epsilon[0];
                         if let Some(suffix) = self.extract_single_step(exit_state) {
-                            steps.push(PatternStep::NonGreedyPlus(ByteClass::new(ranges), Box::new(suffix)));
+                            steps.push(PatternStep::NonGreedyPlus(
+                                ByteClass::new(ranges),
+                                Box::new(suffix),
+                            ));
                             // Skip past the exit state and its suffix
                             visited[target as usize] = true;
                             visited[eps0 as usize] = true;
@@ -4621,10 +4756,13 @@ impl TaggedNfaJitCompiler {
                         // Extract the character ranges from the pattern
                         if !pattern_state.transitions.is_empty() {
                             let target = pattern_state.transitions[0].1;
-                            let all_same_target = pattern_state.transitions.iter().all(|(_, t)| *t == target);
+                            let all_same_target =
+                                pattern_state.transitions.iter().all(|(_, t)| *t == target);
 
                             if all_same_target {
-                                let ranges: Vec<ByteRange> = pattern_state.transitions.iter()
+                                let ranges: Vec<ByteRange> = pattern_state
+                                    .transitions
+                                    .iter()
                                     .map(|(r, _)| r.clone())
                                     .collect();
 
@@ -4633,7 +4771,10 @@ impl TaggedNfaJitCompiler {
 
                                 // Extract the suffix
                                 if let Some(suffix) = self.extract_single_step(exit_state) {
-                                    steps.push(PatternStep::NonGreedyStar(ByteClass::new(ranges), Box::new(suffix)));
+                                    steps.push(PatternStep::NonGreedyStar(
+                                        ByteClass::new(ranges),
+                                        Box::new(suffix),
+                                    ));
                                     visited[current as usize] = true;
                                     visited[state.epsilon[0] as usize] = true;
                                     visited[pattern_start as usize] = true;
@@ -4660,7 +4801,8 @@ impl TaggedNfaJitCompiler {
                 let mut alternatives = Vec::new();
                 for &alt_start in &state.epsilon {
                     let mut alt_visited = visited.to_vec();
-                    let alt_steps = self.extract_from_state(alt_start, &mut alt_visited, Some(common_end));
+                    let alt_steps =
+                        self.extract_from_state(alt_start, &mut alt_visited, Some(common_end));
                     if alt_steps.is_empty() && !self.is_trivial_path(alt_start, common_end) {
                         return Vec::new(); // Alternative too complex
                     }
@@ -4728,9 +4870,8 @@ impl TaggedNfaJitCompiler {
                     return Vec::new(); // Different targets
                 }
 
-                let ranges: Vec<ByteRange> = state.transitions.iter()
-                    .map(|(r, _)| r.clone())
-                    .collect();
+                let ranges: Vec<ByteRange> =
+                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
 
                 // Check for greedy plus pattern: current -[byte]-> target -[eps]-> current (loop back)
                 //                                              |-> next (exit)
@@ -4791,13 +4932,17 @@ impl TaggedNfaJitCompiler {
 
                 // Try to detect: eps0 has transitions that loop, eps1 exits
                 // or vice versa
-                if let Some((ranges, exit_state)) = self.detect_greedy_star_lookaround(inner_nfa, current, eps0, eps1, &visited) {
+                if let Some((ranges, exit_state)) =
+                    self.detect_greedy_star_lookaround(inner_nfa, current, eps0, eps1, &visited)
+                {
                     steps.push(PatternStep::GreedyStar(ByteClass::new(ranges)));
                     visited[current as usize] = true;
                     current = exit_state;
                     continue;
                 }
-                if let Some((ranges, exit_state)) = self.detect_greedy_star_lookaround(inner_nfa, current, eps1, eps0, &visited) {
+                if let Some((ranges, exit_state)) =
+                    self.detect_greedy_star_lookaround(inner_nfa, current, eps1, eps0, &visited)
+                {
                     steps.push(PatternStep::GreedyStar(ByteClass::new(ranges)));
                     visited[current as usize] = true;
                     current = exit_state;
@@ -4845,7 +4990,9 @@ impl TaggedNfaJitCompiler {
             return None;
         }
 
-        let ranges: Vec<ByteRange> = loop_state.transitions.iter()
+        let ranges: Vec<ByteRange> = loop_state
+            .transitions
+            .iter()
             .map(|(r, _)| r.clone())
             .collect();
 
@@ -4927,7 +5074,12 @@ impl TaggedNfaJitCompiler {
 
     /// Traces from a state to find where it merges (state with incoming epsilon from multiple sources).
     /// Returns the merge point state ID or None.
-    fn trace_to_merge_point_with_depth(&self, start: StateId, alt_start: StateId, depth: usize) -> Option<StateId> {
+    fn trace_to_merge_point_with_depth(
+        &self,
+        start: StateId,
+        alt_start: StateId,
+        depth: usize,
+    ) -> Option<StateId> {
         use crate::nfa::NfaInstruction;
 
         // Limit recursion depth to prevent stack overflow
@@ -5032,7 +5184,8 @@ impl TaggedNfaJitCompiler {
         }
         let state = &self.nfa.states[start as usize];
         if state.epsilon.len() == 1 && state.transitions.is_empty() {
-            return state.epsilon[0] == end || self.is_trivial_path_with_depth(state.epsilon[0], end, depth + 1);
+            return state.epsilon[0] == end
+                || self.is_trivial_path_with_depth(state.epsilon[0], end, depth + 1);
         }
         false
     }
@@ -5054,9 +5207,8 @@ impl TaggedNfaJitCompiler {
                     return None;
                 }
 
-                let ranges: Vec<ByteRange> = state.transitions.iter()
-                    .map(|(r, _)| r.clone())
-                    .collect();
+                let ranges: Vec<ByteRange> =
+                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
 
                 return if ranges.len() == 1 && ranges[0].start == ranges[0].end {
                     Some(PatternStep::Byte(ranges[0].start))
@@ -5114,15 +5266,22 @@ impl TaggedNfaJitCompiler {
         fallback_steps: Option<Vec<PatternStep>>,
     ) -> Result<TaggedNfaJit> {
         let code = self.asm.finalize().map_err(|e| {
-            Error::new(ErrorKind::Jit(format!("Failed to finalize JIT code: {:?}", e)), "")
+            Error::new(
+                ErrorKind::Jit(format!("Failed to finalize JIT code: {:?}", e)),
+                "",
+            )
         })?;
 
         // Get function pointers
         let find_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64 =
             unsafe { std::mem::transmute(code.ptr(find_offset)) };
 
-        let captures_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64 =
-            unsafe { std::mem::transmute(code.ptr(captures_offset)) };
+        let captures_fn: unsafe extern "sysv64" fn(
+            *const u8,
+            usize,
+            *mut TaggedNfaContext,
+            *mut i64,
+        ) -> i64 = unsafe { std::mem::transmute(code.ptr(captures_offset)) };
 
         let capture_count = self.nfa.capture_count;
         let state_count = self.nfa.states.len();

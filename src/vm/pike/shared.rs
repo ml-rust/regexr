@@ -196,10 +196,7 @@ impl Thread {
     /// Record a capture end event. O(1) operation.
     #[inline]
     pub fn record_capture_end(&mut self, group_idx: u32, pos: usize) {
-        let node = CaptureNode::new(
-            CaptureAction::End(group_idx, pos),
-            self.capture_head.take(),
-        );
+        let node = CaptureNode::new(CaptureAction::End(group_idx, pos), self.capture_head.take());
         self.capture_head = Some(node);
     }
 
@@ -290,7 +287,10 @@ pub enum InstructionResult {
     /// Mark thread as having passed through a non-greedy exit
     NonGreedyExit,
     /// Transition to target state after consuming `bytes_consumed` bytes (for CodepointClass)
-    CodepointTransition { bytes_consumed: usize, target: StateId },
+    CodepointTransition {
+        bytes_consumed: usize,
+        target: StateId,
+    },
 }
 
 /// Decodes a single UTF-8 codepoint from a byte slice.

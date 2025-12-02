@@ -7,21 +7,16 @@
 pub const DIGITS: &[(u8, u8)] = &[(b'0', b'9')];
 
 /// Word characters (ASCII).
-pub const WORD: &[(u8, u8)] = &[
-    (b'0', b'9'),
-    (b'A', b'Z'),
-    (b'a', b'z'),
-    (b'_', b'_'),
-];
+pub const WORD: &[(u8, u8)] = &[(b'0', b'9'), (b'A', b'Z'), (b'a', b'z'), (b'_', b'_')];
 
 /// Whitespace characters (ASCII).
 pub const WHITESPACE: &[(u8, u8)] = &[
-    (b'\t', b'\t'),       // Tab
-    (b'\n', b'\n'),       // Newline
-    (b'\x0B', b'\x0B'),   // Vertical tab
-    (b'\x0C', b'\x0C'),   // Form feed
-    (b'\r', b'\r'),       // Carriage return
-    (b' ', b' '),         // Space
+    (b'\t', b'\t'),     // Tab
+    (b'\n', b'\n'),     // Newline
+    (b'\x0B', b'\x0B'), // Vertical tab
+    (b'\x0C', b'\x0C'), // Form feed
+    (b'\r', b'\r'),     // Carriage return
+    (b' ', b' '),       // Space
 ];
 
 /// Returns true if the byte is a word character.

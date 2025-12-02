@@ -30,10 +30,7 @@ fn test_backref_performance() {
     let pattern = r#"(['"])[^'"]*\1"#;
 
     // Test data sizes
-    let sizes = [
-        ("1KB", 1024),
-        ("10KB", 10 * 1024),
-    ];
+    let sizes = [("1KB", 1024), ("10KB", 10 * 1024)];
 
     println!("\n=== Backreference Performance Test ===");
     println!("Pattern: {}", pattern);
@@ -69,7 +66,10 @@ fn test_backref_performance() {
         }
         let elapsed = start.elapsed();
         let per_iter = elapsed / iterations;
-        println!("{} - Default regex: {:?} per iteration, {} matches", name, per_iter, count);
+        println!(
+            "{} - Default regex: {:?} per iteration, {} matches",
+            name, per_iter, count
+        );
 
         // Benchmark JIT regex
         #[cfg(feature = "jit")]
@@ -81,10 +81,16 @@ fn test_backref_performance() {
             }
             let elapsed = start.elapsed();
             let per_iter = elapsed / iterations;
-            println!("{} - JIT regex:     {:?} per iteration, {} matches", name, per_iter, count_jit);
+            println!(
+                "{} - JIT regex:     {:?} per iteration, {} matches",
+                name, per_iter, count_jit
+            );
 
             // Verify same results
-            assert_eq!(count, count_jit, "JIT and default should find same number of matches");
+            assert_eq!(
+                count, count_jit,
+                "JIT and default should find same number of matches"
+            );
         }
 
         println!();

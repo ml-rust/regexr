@@ -24,7 +24,11 @@ impl TaggedNfa {
     }
 
     /// Finds a match starting at or after the given position.
-    pub fn find_at(steps: &[PatternStep], input: &[u8], start_from: usize) -> Option<(usize, usize)> {
+    pub fn find_at(
+        steps: &[PatternStep],
+        input: &[u8],
+        start_from: usize,
+    ) -> Option<(usize, usize)> {
         for start in start_from..=input.len() {
             if let Some(end) = Self::match_at(steps, input, start) {
                 return Some((start, end));
@@ -95,7 +99,7 @@ impl TaggedNfa {
                 }
                 PatternStep::GreedyStar(byte_class) => {
                     let min_pos = pos; // Can backtrack to zero matches
-                    // Match as many as possible (zero or more)
+                                       // Match as many as possible (zero or more)
                     while pos < input.len() {
                         let byte = input[pos];
                         if !byte_class.contains(byte) {
@@ -242,7 +246,7 @@ impl TaggedNfa {
                     }
                     // Track character boundaries for backtracking
                     let mut boundaries = vec![pos]; // After first match
-                    // Match as many as possible
+                                                    // Match as many as possible
                     while let Some((cp, len)) = Self::decode_utf8(input, pos) {
                         if !cpclass.contains(cp) {
                             break;
@@ -272,7 +276,9 @@ impl TaggedNfa {
                             if remaining_steps.is_empty() {
                                 return Some(alt_end);
                             }
-                            if let Some(final_end) = Self::match_steps(remaining_steps, input, alt_end) {
+                            if let Some(final_end) =
+                                Self::match_steps(remaining_steps, input, alt_end)
+                            {
                                 return Some(final_end);
                             }
                             // This alternative matched but remaining steps failed, try next alternative

@@ -87,7 +87,10 @@ impl BitSet256 {
     /// Returns true if all bits are one.
     #[inline]
     pub fn is_all_ones(&self) -> bool {
-        self.parts[0] == !0u64 && self.parts[1] == !0u64 && self.parts[2] == !0u64 && self.parts[3] == !0u64
+        self.parts[0] == !0u64
+            && self.parts[1] == !0u64
+            && self.parts[2] == !0u64
+            && self.parts[3] == !0u64
     }
 
     /// Computes the bitwise OR of two bit sets.
@@ -233,9 +236,7 @@ impl ByteSet {
 
     /// Creates a byte set containing all bytes.
     pub fn all() -> Self {
-        Self {
-            bits: [!0u64; 4],
-        }
+        Self { bits: [!0u64; 4] }
     }
 
     /// Inserts a byte into the set.
@@ -272,12 +273,7 @@ impl ByteSet {
     /// Computes the complement of the byte set.
     pub fn complement(&self) -> ByteSet {
         ByteSet {
-            bits: [
-                !self.bits[0],
-                !self.bits[1],
-                !self.bits[2],
-                !self.bits[3],
-            ],
+            bits: [!self.bits[0], !self.bits[1], !self.bits[2], !self.bits[3]],
         }
     }
 }
@@ -517,7 +513,6 @@ impl GlushkovBuilder {
             HirExpr::UnicodeCpClass(_) => None,
         }
     }
-
 }
 
 impl Default for GlushkovBuilder {
@@ -1003,10 +998,18 @@ mod tests {
 
         // Follow sets:
         // Follow(0) = {1, 2} (after 'a', can go to '.' or 'b' since .* is nullable)
-        assert_eq!(nfa.follow[0] & 0b110, 0b110, "Follow(0) should include positions 1 and 2");
+        assert_eq!(
+            nfa.follow[0] & 0b110,
+            0b110,
+            "Follow(0) should include positions 1 and 2"
+        );
 
         // Follow(1) = {1, 2} (after '.', can stay at '.' or go to 'b')
-        assert_eq!(nfa.follow[1] & 0b110, 0b110, "Follow(1) should include positions 1 and 2");
+        assert_eq!(
+            nfa.follow[1] & 0b110,
+            0b110,
+            "Follow(1) should include positions 1 and 2"
+        );
 
         // Follow(2) = {} (after 'b', nothing follows - it's the end)
         assert_eq!(nfa.follow[2], 0, "Follow(2) should be empty");

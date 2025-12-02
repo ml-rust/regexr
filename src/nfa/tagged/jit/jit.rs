@@ -9,8 +9,7 @@ use crate::nfa::Nfa;
 use crate::vm::{PikeVm, PikeVmContext};
 
 use super::super::{
-    analyze_liveness, NfaLiveness, TaggedNfaContext, PatternStep,
-    TaggedNfa, LookaroundCache,
+    analyze_liveness, LookaroundCache, NfaLiveness, PatternStep, TaggedNfa, TaggedNfaContext,
 };
 use super::x86_64::TaggedNfaJitCompiler;
 
@@ -28,7 +27,8 @@ pub struct TaggedNfaJit {
     find_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64,
     /// Entry point for `captures` (writes to captures_out buffer, returns match end or -1/-2).
     /// Arguments: input_ptr, input_len, ctx, captures_out
-    captures_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64,
+    captures_fn:
+        unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64,
     /// Liveness analysis for sparse copying.
     liveness: NfaLiveness,
     /// The NFA (kept for reference, PikeVm is used for fallback).
@@ -74,7 +74,12 @@ impl TaggedNfaJit {
     pub(super) fn new(
         code: ExecutableBuffer,
         find_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64,
-        captures_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64,
+        captures_fn: unsafe extern "sysv64" fn(
+            *const u8,
+            usize,
+            *mut TaggedNfaContext,
+            *mut i64,
+        ) -> i64,
         liveness: NfaLiveness,
         nfa: Nfa,
         capture_count: u32,
@@ -129,9 +134,8 @@ impl TaggedNfaJit {
             #[cfg(debug_assertions)]
             let t0 = std::time::Instant::now();
 
-            let result = unsafe {
-                (self.find_fn)(input.as_ptr(), input.len(), std::ptr::null_mut())
-            };
+            let result =
+                unsafe { (self.find_fn)(input.as_ptr(), input.len(), std::ptr::null_mut()) };
 
             #[cfg(debug_assertions)]
             {
@@ -140,8 +144,12 @@ impl TaggedNfaJit {
                 let count = CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 if count % 10000 == 0 {
                     let total = TOTAL_NS.load(std::sync::atomic::Ordering::Relaxed);
-                    eprintln!("[DEBUG] JIT fn call: {} calls, {}ns total, {}ns/call avg",
-                        count, total, total / count);
+                    eprintln!(
+                        "[DEBUG] JIT fn call: {} calls, {}ns total, {}ns/call avg",
+                        count,
+                        total,
+                        total / count
+                    );
                 }
             }
 
@@ -177,16 +185,12 @@ impl TaggedNfaJit {
 
         // Ensure lookaround cache is large enough for this input
         if ctx.lookaround_cache.max_len < input.len() + 1 {
-            ctx.lookaround_cache = LookaroundCache::new(
-                self.lookaround_count as usize,
-                input.len() + 1,
-            );
+            ctx.lookaround_cache =
+                LookaroundCache::new(self.lookaround_count as usize, input.len() + 1);
         }
         ctx.reset();
 
-        let result = unsafe {
-            (self.find_fn)(input.as_ptr(), input.len(), ctx)
-        };
+        let result = unsafe { (self.find_fn)(input.as_ptr(), input.len(), ctx) };
 
         if result == JIT_USE_INTERPRETER {
             // find_fn doesn't support this pattern (e.g., backrefs need capture tracking).
@@ -250,10 +254,8 @@ impl TaggedNfaJit {
 
         // Ensure lookaround cache is large enough for this input
         if ctx.lookaround_cache.max_len < input.len() + 1 {
-            ctx.lookaround_cache = LookaroundCache::new(
-                self.lookaround_count as usize,
-                input.len() + 1,
-            );
+            ctx.lookaround_cache =
+                LookaroundCache::new(self.lookaround_count as usize, input.len() + 1);
         }
         ctx.reset();
 
@@ -331,9 +333,7 @@ impl TaggedNfaJit {
 
         // Fast path: if find_fn doesn't need context
         if !self.find_needs_ctx {
-            let result = unsafe {
-                (self.find_fn)(slice_ptr, slice_len, std::ptr::null_mut())
-            };
+            let result = unsafe { (self.find_fn)(slice_ptr, slice_len, std::ptr::null_mut()) };
 
             if result == JIT_USE_INTERPRETER {
                 // Use fast TaggedNfa if we have fallback_steps
@@ -364,16 +364,12 @@ impl TaggedNfaJit {
         });
 
         if ctx.lookaround_cache.max_len < slice_len + 1 {
-            ctx.lookaround_cache = LookaroundCache::new(
-                self.lookaround_count as usize,
-                slice_len + 1,
-            );
+            ctx.lookaround_cache =
+                LookaroundCache::new(self.lookaround_count as usize, slice_len + 1);
         }
         ctx.reset();
 
-        let result = unsafe {
-            (self.find_fn)(slice_ptr, slice_len, ctx)
-        };
+        let result = unsafe { (self.find_fn)(slice_ptr, slice_len, ctx) };
 
         if result == JIT_USE_INTERPRETER {
             if let Some(ref steps) = self.fallback_steps {

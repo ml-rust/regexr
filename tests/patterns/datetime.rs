@@ -43,8 +43,8 @@ fn test_time_24hour() {
     // Note: Regex doesn't validate semantic correctness
     // 24:00:00 matches the format, just not semantically valid
     assert!(re.is_match("24:00:00")); // Format matches
-    assert!(!re.is_match("14:30"));    // Missing seconds
-    assert!(!re.is_match("2:30:00"));  // Single digit hour
+    assert!(!re.is_match("14:30")); // Missing seconds
+    assert!(!re.is_match("2:30:00")); // Single digit hour
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn test_time_12hour() {
     // Note: Regex doesn't validate semantic correctness
     // 13:30 PM matches the format, just not semantically valid for 12-hour time
     assert!(re.is_match("13:30 PM")); // Format matches
-    assert!(!re.is_match("2:30"));     // Missing AM/PM
+    assert!(!re.is_match("2:30")); // Missing AM/PM
 }
 
 #[test]
@@ -100,11 +100,11 @@ fn test_datetime_capture_groups() {
 
     let caps = re.captures("2024-03-15 14:30:00").unwrap();
     assert_eq!(&caps[1], "2024"); // year
-    assert_eq!(&caps[2], "03");   // month
-    assert_eq!(&caps[3], "15");   // day
-    assert_eq!(&caps[4], "14");   // hour
-    assert_eq!(&caps[5], "30");   // minute
-    assert_eq!(&caps[6], "00");   // second
+    assert_eq!(&caps[2], "03"); // month
+    assert_eq!(&caps[3], "15"); // day
+    assert_eq!(&caps[4], "14"); // hour
+    assert_eq!(&caps[5], "30"); // minute
+    assert_eq!(&caps[6], "00"); // second
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn test_timestamp_unix() {
     assert!(re.is_match("1706198400")); // Unix timestamp
     assert!(re.is_match("1234567890"));
 
-    assert!(!re.is_match("123456789"));  // Too short
+    assert!(!re.is_match("123456789")); // Too short
     assert!(!re.is_match("12345678901")); // Too long
 }
 

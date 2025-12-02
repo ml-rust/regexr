@@ -2,8 +2,8 @@
 //!
 //! Extracts pattern steps from NFA for fast step-based matching.
 
-use crate::nfa::{ByteClass, ByteRange, Nfa, NfaInstruction, StateId};
 use super::shared::PatternStep;
+use crate::nfa::{ByteClass, ByteRange, Nfa, NfaInstruction, StateId};
 
 /// Combines greedy quantifiers followed by lookahead into combined variants.
 /// This is needed for both JIT and interpreter to handle backtracking correctly.
@@ -13,52 +13,48 @@ pub fn combine_greedy_with_lookahead(steps: Vec<PatternStep>) -> Vec<PatternStep
 
     while i < steps.len() {
         match &steps[i] {
-            PatternStep::GreedyPlus(ranges) if i + 1 < steps.len() => {
-                match &steps[i + 1] {
-                    PatternStep::PositiveLookahead(inner) => {
-                        result.push(PatternStep::GreedyPlusLookahead(
-                            ranges.clone(),
-                            inner.clone(),
-                            true,
-                        ));
-                        i += 2;
-                        continue;
-                    }
-                    PatternStep::NegativeLookahead(inner) => {
-                        result.push(PatternStep::GreedyPlusLookahead(
-                            ranges.clone(),
-                            inner.clone(),
-                            false,
-                        ));
-                        i += 2;
-                        continue;
-                    }
-                    _ => {}
+            PatternStep::GreedyPlus(ranges) if i + 1 < steps.len() => match &steps[i + 1] {
+                PatternStep::PositiveLookahead(inner) => {
+                    result.push(PatternStep::GreedyPlusLookahead(
+                        ranges.clone(),
+                        inner.clone(),
+                        true,
+                    ));
+                    i += 2;
+                    continue;
                 }
-            }
-            PatternStep::GreedyStar(ranges) if i + 1 < steps.len() => {
-                match &steps[i + 1] {
-                    PatternStep::PositiveLookahead(inner) => {
-                        result.push(PatternStep::GreedyStarLookahead(
-                            ranges.clone(),
-                            inner.clone(),
-                            true,
-                        ));
-                        i += 2;
-                        continue;
-                    }
-                    PatternStep::NegativeLookahead(inner) => {
-                        result.push(PatternStep::GreedyStarLookahead(
-                            ranges.clone(),
-                            inner.clone(),
-                            false,
-                        ));
-                        i += 2;
-                        continue;
-                    }
-                    _ => {}
+                PatternStep::NegativeLookahead(inner) => {
+                    result.push(PatternStep::GreedyPlusLookahead(
+                        ranges.clone(),
+                        inner.clone(),
+                        false,
+                    ));
+                    i += 2;
+                    continue;
                 }
-            }
+                _ => {}
+            },
+            PatternStep::GreedyStar(ranges) if i + 1 < steps.len() => match &steps[i + 1] {
+                PatternStep::PositiveLookahead(inner) => {
+                    result.push(PatternStep::GreedyStarLookahead(
+                        ranges.clone(),
+                        inner.clone(),
+                        true,
+                    ));
+                    i += 2;
+                    continue;
+                }
+                PatternStep::NegativeLookahead(inner) => {
+                    result.push(PatternStep::GreedyStarLookahead(
+                        ranges.clone(),
+                        inner.clone(),
+                        false,
+                    ));
+                    i += 2;
+                    continue;
+                }
+                _ => {}
+            },
             _ => {}
         }
         result.push(steps[i].clone());
@@ -177,7 +173,9 @@ impl<'a> StepExtractor<'a> {
                         // Unicode codepoint class - check for greedy loop pattern
                         if (*target as usize) < self.nfa.states.len() {
                             let target_state = &self.nfa.states[*target as usize];
-                            if target_state.epsilon.len() == 2 && target_state.transitions.is_empty() {
+                            if target_state.epsilon.len() == 2
+                                && target_state.transitions.is_empty()
+                            {
                                 let eps0 = target_state.epsilon[0];
                                 let eps1 = target_state.epsilon[1];
 
@@ -222,9 +220,8 @@ impl<'a> StepExtractor<'a> {
                     return Vec::new();
                 }
 
-                let ranges: Vec<ByteRange> = state.transitions.iter()
-                    .map(|(r, _)| r.clone())
-                    .collect();
+                let ranges: Vec<ByteRange> =
+                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
 
                 // Check for greedy loop
                 let target_state = &self.nfa.states[target as usize];
@@ -426,9 +423,8 @@ impl<'a> StepExtractor<'a> {
                     return Vec::new();
                 }
 
-                let ranges: Vec<ByteRange> = state.transitions.iter()
-                    .map(|(r, _)| r.clone())
-                    .collect();
+                let ranges: Vec<ByteRange> =
+                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
 
                 // Check for greedy loop
                 let target_state = &self.nfa.states[target as usize];
@@ -470,10 +466,11 @@ impl<'a> StepExtractor<'a> {
                 let eps0 = state.epsilon[0];
                 let eps1 = state.epsilon[1];
 
-
                 // Check for greedy star pattern: one epsilon leads to loop body with transitions,
                 // other epsilon leads to exit (continuation)
-                if let Some((ranges, exit_state)) = self.detect_greedy_star(current, eps0, eps1, visited) {
+                if let Some((ranges, exit_state)) =
+                    self.detect_greedy_star(current, eps0, eps1, visited)
+                {
                     // #[cfg(debug_assertions)]
                     // eprintln!("DEBUG extract_branch: detected greedy star at state {}", current);
                     steps.push(PatternStep::GreedyStar(ByteClass::new(ranges)));
@@ -481,7 +478,9 @@ impl<'a> StepExtractor<'a> {
                     current = exit_state;
                     continue;
                 }
-                if let Some((ranges, exit_state)) = self.detect_greedy_star(current, eps1, eps0, visited) {
+                if let Some((ranges, exit_state)) =
+                    self.detect_greedy_star(current, eps1, eps0, visited)
+                {
                     // #[cfg(debug_assertions)]
                     // eprintln!("DEBUG extract_branch: detected greedy star at state {} (swapped)", current);
                     steps.push(PatternStep::GreedyStar(ByteClass::new(ranges)));
@@ -649,9 +648,8 @@ impl<'a> StepExtractor<'a> {
                     return Vec::new();
                 }
 
-                let ranges: Vec<ByteRange> = state.transitions.iter()
-                    .map(|(r, _)| r.clone())
-                    .collect();
+                let ranges: Vec<ByteRange> =
+                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
 
                 // Check for greedy star/plus pattern: state has transitions to target,
                 // and target has epsilon transitions where one leads back to current state
@@ -721,13 +719,17 @@ impl<'a> StepExtractor<'a> {
 
                 // Try to detect: eps0 has transitions that loop, eps1 exits
                 // or vice versa
-                if let Some((ranges, exit_state)) = self.detect_greedy_star_in_lookaround(inner_nfa, current, eps0, eps1, &visited) {
+                if let Some((ranges, exit_state)) =
+                    self.detect_greedy_star_in_lookaround(inner_nfa, current, eps0, eps1, &visited)
+                {
                     steps.push(PatternStep::GreedyStar(ByteClass::new(ranges)));
                     visited[current as usize] = true;
                     current = exit_state;
                     continue;
                 }
-                if let Some((ranges, exit_state)) = self.detect_greedy_star_in_lookaround(inner_nfa, current, eps1, eps0, &visited) {
+                if let Some((ranges, exit_state)) =
+                    self.detect_greedy_star_in_lookaround(inner_nfa, current, eps1, eps0, &visited)
+                {
                     steps.push(PatternStep::GreedyStar(ByteClass::new(ranges)));
                     visited[current as usize] = true;
                     current = exit_state;
@@ -798,9 +800,8 @@ impl<'a> StepExtractor<'a> {
                     return Vec::new();
                 }
 
-                let ranges: Vec<ByteRange> = state.transitions.iter()
-                    .map(|(r, _)| r.clone())
-                    .collect();
+                let ranges: Vec<ByteRange> =
+                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
 
                 // Check for repetition patterns - we can't handle these in lookbehind
                 let target_state = &inner_nfa.states[target as usize];
@@ -955,7 +956,9 @@ impl<'a> StepExtractor<'a> {
             return None;
         }
 
-        let ranges: Vec<ByteRange> = loop_state.transitions.iter()
+        let ranges: Vec<ByteRange> = loop_state
+            .transitions
+            .iter()
             .map(|(r, _)| r.clone())
             .collect();
 
@@ -1000,18 +1003,18 @@ impl<'a> StepExtractor<'a> {
                 PatternStep::Byte(_) => len += 1,
                 PatternStep::ByteClass(_) => len += 1,
                 PatternStep::GreedyPlus(_) => len += 1, // At least one
-                PatternStep::GreedyStar(_) => {}, // Zero or more
+                PatternStep::GreedyStar(_) => {}        // Zero or more
                 PatternStep::GreedyPlusLookahead(_, _, _) => len += 1,
-                PatternStep::GreedyStarLookahead(_, _, _) => {},
-                PatternStep::PositiveLookahead(_) |
-                PatternStep::NegativeLookahead(_) |
-                PatternStep::PositiveLookbehind(_, _) |
-                PatternStep::NegativeLookbehind(_, _) => {}, // Zero-width
-                PatternStep::WordBoundary |
-                PatternStep::NotWordBoundary |
-                PatternStep::StartOfText |
-                PatternStep::EndOfText => {}, // Zero-width
-                _ => {}, // Other steps - conservatively assume 0
+                PatternStep::GreedyStarLookahead(_, _, _) => {}
+                PatternStep::PositiveLookahead(_)
+                | PatternStep::NegativeLookahead(_)
+                | PatternStep::PositiveLookbehind(_, _)
+                | PatternStep::NegativeLookbehind(_, _) => {} // Zero-width
+                PatternStep::WordBoundary
+                | PatternStep::NotWordBoundary
+                | PatternStep::StartOfText
+                | PatternStep::EndOfText => {} // Zero-width
+                _ => {} // Other steps - conservatively assume 0
             }
         }
         len

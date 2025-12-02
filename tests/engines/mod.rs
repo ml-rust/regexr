@@ -56,7 +56,7 @@ fn test_single_char() {
     assert!(jit.is_full_match(b"a"));
     assert!(!jit.is_full_match(b"b"));
     assert!(!jit.is_full_match(b"aa"));
-    assert!(jit.is_match(b"aa"));  // contains "a"
+    assert!(jit.is_match(b"aa")); // contains "a"
     assert!(!jit.is_full_match(b""));
 }
 
@@ -68,7 +68,7 @@ fn test_alternation() {
     assert!(jit.is_full_match(b"b"));
     assert!(!jit.is_full_match(b"c"));
     assert!(!jit.is_full_match(b"ab"));
-    assert!(jit.is_match(b"ab"));  // contains "a" or "b"
+    assert!(jit.is_match(b"ab")); // contains "a" or "b"
     assert!(!jit.is_full_match(b""));
 }
 
@@ -88,7 +88,7 @@ fn test_star_empty_match() {
 
     // Should not full-match other chars (but is_match will match empty at start)
     assert!(!jit.is_full_match(b"b"));
-    assert!(jit.is_match(b"b"));  // matches empty string at position 0
+    assert!(jit.is_match(b"b")); // matches empty string at position 0
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn test_plus() {
 
     // Should not full-match other chars
     assert!(!jit.is_full_match(b"b"));
-    assert!(!jit.is_match(b"b"));  // no "a" in "b"
+    assert!(!jit.is_match(b"b")); // no "a" in "b"
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn test_optional() {
 
     // Should NOT full-match multiple chars (but is_match finds match)
     assert!(!jit.is_full_match(b"aa"));
-    assert!(jit.is_match(b"aa"));  // matches "a" or empty at some position
+    assert!(jit.is_match(b"aa")); // matches "a" or empty at some position
 }
 
 #[test]
@@ -137,11 +137,11 @@ fn test_concatenation() {
 fn test_complex_pattern() {
     let jit = jit_compile("ab*c");
 
-    assert!(jit.is_full_match(b"ac"));    // b*=0
-    assert!(jit.is_full_match(b"abc"));   // b*=1
-    assert!(jit.is_full_match(b"abbc"));  // b*=2
+    assert!(jit.is_full_match(b"ac")); // b*=0
+    assert!(jit.is_full_match(b"abc")); // b*=1
+    assert!(jit.is_full_match(b"abbc")); // b*=2
     assert!(jit.is_full_match(b"abbbc")); // b*=3
-    assert!(!jit.is_full_match(b"bc"));   // missing 'a'
+    assert!(!jit.is_full_match(b"bc")); // missing 'a'
 }
 
 #[test]
@@ -153,7 +153,7 @@ fn test_character_class() {
     assert!(jit.is_full_match(b"c"));
     assert!(!jit.is_full_match(b"d"));
     assert!(!jit.is_full_match(b"ab"));
-    assert!(jit.is_match(b"ab"));  // contains "a"
+    assert!(jit.is_match(b"ab")); // contains "a"
 }
 
 #[test]
@@ -246,7 +246,7 @@ fn test_all_bytes() {
 
     assert!(!jit.is_full_match(&[]));
     assert!(!jit.is_full_match(&[0, 0])); // Should only full-match single byte
-    assert!(jit.is_match(&[0, 0]));  // But is_match finds a match
+    assert!(jit.is_match(&[0, 0])); // But is_match finds a match
 }
 
 #[test]
@@ -257,7 +257,7 @@ fn test_long_pattern() {
     assert!(jit.is_full_match(b"abcdefghijklmnop"));
     assert!(!jit.is_full_match(b"abcdefghijklmno"));
     assert!(!jit.is_full_match(b"abcdefghijklmnopq"));
-    assert!(jit.is_match(b"abcdefghijklmnopq"));  // contains pattern
+    assert!(jit.is_match(b"abcdefghijklmnopq")); // contains pattern
 }
 
 #[test]
@@ -282,7 +282,7 @@ fn test_nested_repetition() {
     assert!(jit.is_full_match(b"ababab"));
     assert!(!jit.is_full_match(b"a"));
     assert!(!jit.is_full_match(b"aba"));
-    assert!(jit.is_match(b"aba"));  // matches "ab" or empty
+    assert!(jit.is_match(b"aba")); // matches "ab" or empty
 }
 
 #[test]
@@ -315,7 +315,7 @@ fn test_empty_pattern() {
 
     assert!(jit.is_full_match(b""));
     assert!(!jit.is_full_match(b"a"));
-    assert!(jit.is_match(b"a"));  // matches empty at position 0
+    assert!(jit.is_match(b"a")); // matches empty at position 0
 }
 
 #[test]

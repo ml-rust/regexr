@@ -1,12 +1,20 @@
 //! HIR builder - translates AST to HIR.
 
 use crate::error::{Error, ErrorKind, Result};
-use crate::nfa::utf8_automata::{compile_utf8_complement, compile_utf8_range, optimize_sequences, Utf8Sequence};
-use crate::parser::{Anchor, Ast, Class, ClassRange, Expr, Flags, Group, GroupKind, Lookaround, LookaroundKind, PerlClassKind, Repeat};
+use crate::nfa::utf8_automata::{
+    compile_utf8_complement, compile_utf8_range, optimize_sequences, Utf8Sequence,
+};
+use crate::parser::{
+    Anchor, Ast, Class, ClassRange, Expr, Flags, Group, GroupKind, Lookaround, LookaroundKind,
+    PerlClassKind, Repeat,
+};
 
 use super::unicode_data;
 
-use super::{CodepointClass, Hir, HirAnchor, HirCapture, HirClass, HirExpr, HirLookaround, HirLookaroundKind, HirProps, HirRepeat};
+use super::{
+    CodepointClass, Hir, HirAnchor, HirCapture, HirClass, HirExpr, HirLookaround,
+    HirLookaroundKind, HirProps, HirRepeat,
+};
 
 /// Translator from AST to HIR.
 pub struct HirTranslator {
@@ -157,10 +165,7 @@ impl HirTranslator {
             if equivalents.len() > 1 {
                 // Multiple equivalents - emit a character class
                 // Convert code points to ranges for the class
-                let ranges: Vec<(u32, u32)> = equivalents
-                    .iter()
-                    .map(|&cp| (cp, cp))
-                    .collect();
+                let ranges: Vec<(u32, u32)> = equivalents.iter().map(|&cp| (cp, cp)).collect();
 
                 return self.translate_ranges_to_hir(&ranges, false);
             }
@@ -187,24 +192,38 @@ impl HirTranslator {
     /// Translates a Perl class in ASCII mode.
     fn translate_perl_class_ascii(&self, kind: PerlClassKind) -> Result<HirExpr> {
         let (ranges, negated) = match kind {
-            PerlClassKind::Digit => {
-                (vec![(b'0', b'9')], false)
-            }
-            PerlClassKind::NotDigit => {
-                (vec![(b'0', b'9')], true)
-            }
-            PerlClassKind::Word => {
-                (vec![(b'a', b'z'), (b'A', b'Z'), (b'0', b'9'), (b'_', b'_')], false)
-            }
-            PerlClassKind::NotWord => {
-                (vec![(b'a', b'z'), (b'A', b'Z'), (b'0', b'9'), (b'_', b'_')], true)
-            }
-            PerlClassKind::Whitespace => {
-                (vec![(b' ', b' '), (b'\t', b'\t'), (b'\n', b'\n'), (b'\r', b'\r'), (0x0C, 0x0C), (0x0B, 0x0B)], false)
-            }
-            PerlClassKind::NotWhitespace => {
-                (vec![(b' ', b' '), (b'\t', b'\t'), (b'\n', b'\n'), (b'\r', b'\r'), (0x0C, 0x0C), (0x0B, 0x0B)], true)
-            }
+            PerlClassKind::Digit => (vec![(b'0', b'9')], false),
+            PerlClassKind::NotDigit => (vec![(b'0', b'9')], true),
+            PerlClassKind::Word => (
+                vec![(b'a', b'z'), (b'A', b'Z'), (b'0', b'9'), (b'_', b'_')],
+                false,
+            ),
+            PerlClassKind::NotWord => (
+                vec![(b'a', b'z'), (b'A', b'Z'), (b'0', b'9'), (b'_', b'_')],
+                true,
+            ),
+            PerlClassKind::Whitespace => (
+                vec![
+                    (b' ', b' '),
+                    (b'\t', b'\t'),
+                    (b'\n', b'\n'),
+                    (b'\r', b'\r'),
+                    (0x0C, 0x0C),
+                    (0x0B, 0x0B),
+                ],
+                false,
+            ),
+            PerlClassKind::NotWhitespace => (
+                vec![
+                    (b' ', b' '),
+                    (b'\t', b'\t'),
+                    (b'\n', b'\n'),
+                    (b'\r', b'\r'),
+                    (0x0C, 0x0C),
+                    (0x0B, 0x0B),
+                ],
+                true,
+            ),
         };
 
         Ok(HirExpr::Class(HirClass::new(ranges, negated)))
@@ -281,9 +300,8 @@ impl HirTranslator {
 
     /// Translates a Unicode property to HIR.
     fn translate_unicode_property(&mut self, name: &str, negated: bool) -> Result<HirExpr> {
-        let ranges = unicode_data::get_property(name).ok_or_else(|| {
-            Error::new(ErrorKind::UnknownUnicodeProperty(name.to_string()), name)
-        })?;
+        let ranges = unicode_data::get_property(name)
+            .ok_or_else(|| Error::new(ErrorKind::UnknownUnicodeProperty(name.to_string()), name))?;
 
         // Unicode properties with many code points cause DFA state explosion.
         // Use CodepointClass for large properties to avoid expanding UTF-8 automata.
@@ -301,7 +319,9 @@ impl HirTranslator {
             self.props.has_large_unicode_class = true;
             // Use CodepointClass for efficient runtime matching
             let cp_ranges: Vec<(u32, u32)> = ranges.to_vec();
-            return Ok(HirExpr::UnicodeCpClass(CodepointClass::new(cp_ranges, negated)));
+            return Ok(HirExpr::UnicodeCpClass(CodepointClass::new(
+                cp_ranges, negated,
+            )));
         }
 
         // For small Unicode properties, expand to byte-level automata
@@ -777,9 +797,9 @@ impl HirTranslator {
                         HirExpr::Class(_) => true,
                         HirExpr::Concat(parts) => {
                             // Concat of Literals/Classes represents multi-byte UTF-8 sequence
-                            parts.iter().all(|p| {
-                                matches!(p, HirExpr::Class(_) | HirExpr::Literal(_))
-                            })
+                            parts
+                                .iter()
+                                .all(|p| matches!(p, HirExpr::Class(_) | HirExpr::Literal(_)))
                         }
                         _ => false,
                     }
@@ -943,7 +963,8 @@ mod tests {
         let nfa = crate::nfa::compile(&Hir {
             expr: hir.expr,
             props: hir.props,
-        }).unwrap();
+        })
+        .unwrap();
 
         let mut dfa = crate::dfa::LazyDfa::new(nfa);
         // ASCII letters should match
@@ -967,7 +988,8 @@ mod tests {
         let nfa = crate::nfa::compile(&Hir {
             expr: hir.expr,
             props: hir.props,
-        }).unwrap();
+        })
+        .unwrap();
 
         // The NFA should be able to match these emoji (functional test)
         let mut dfa = crate::dfa::LazyDfa::new(nfa);
@@ -987,7 +1009,10 @@ mod tests {
 
         let ast = parse(r"(a)(b)\1\2").unwrap();
         let result = HirTranslator::new().translate(&ast);
-        assert!(result.is_ok(), "Valid backrefs \\1\\2 with 2 groups should work");
+        assert!(
+            result.is_ok(),
+            "Valid backrefs \\1\\2 with 2 groups should work"
+        );
 
         // Invalid backrefs - reference non-existent groups
         let ast = parse(r"\1").unwrap();
@@ -1029,16 +1054,25 @@ mod tests {
         // Unicode properties should be detected as large
         let ast = parse(r"\p{Han}").unwrap();
         let hir = HirTranslator::new().translate(&ast).unwrap();
-        assert!(hir.props.has_large_unicode_class, "\\p{{Han}} should be detected as large unicode class");
+        assert!(
+            hir.props.has_large_unicode_class,
+            "\\p{{Han}} should be detected as large unicode class"
+        );
 
         // ASCII-only classes should NOT be detected as large
         let ast = parse(r"[a-z]").unwrap();
         let hir = HirTranslator::new().translate(&ast).unwrap();
-        assert!(!hir.props.has_large_unicode_class, "[a-z] should not be large");
+        assert!(
+            !hir.props.has_large_unicode_class,
+            "[a-z] should not be large"
+        );
 
         // Greek range uses multi-byte UTF-8, should be flagged to skip DFA JIT
         let ast = parse(r"[α-ω]").unwrap();
         let hir = HirTranslator::new().translate(&ast).unwrap();
-        assert!(hir.props.has_large_unicode_class, "[α-ω] has multi-byte UTF-8, should skip DFA JIT");
+        assert!(
+            hir.props.has_large_unicode_class,
+            "[α-ω] has multi-byte UTF-8, should skip DFA JIT"
+        );
     }
 }

@@ -55,7 +55,10 @@ impl Teddy {
             return None;
         }
 
-        if patterns.iter().any(|p| p.is_empty() || p.len() > MAX_PATTERN_LEN) {
+        if patterns
+            .iter()
+            .any(|p| p.is_empty() || p.len() > MAX_PATTERN_LEN)
+        {
             return None;
         }
 
@@ -154,8 +157,12 @@ impl Teddy {
         }
 
         // Get or build cached SIMD lookup tables
-        let lo_bytes = self.lo_simd_table.get_or_init(|| self.build_simd_table_cached(&self.lo_nibble_table));
-        let hi_bytes = self.hi_simd_table.get_or_init(|| self.build_simd_table_cached(&self.hi_nibble_table));
+        let lo_bytes = self
+            .lo_simd_table
+            .get_or_init(|| self.build_simd_table_cached(&self.lo_nibble_table));
+        let hi_bytes = self
+            .hi_simd_table
+            .get_or_init(|| self.build_simd_table_cached(&self.hi_nibble_table));
 
         // Load cached tables into SIMD registers
         let lo_table = _mm256_loadu_si256(lo_bytes.as_ptr() as *const __m256i);
@@ -181,9 +188,8 @@ impl Teddy {
             let candidates = _mm256_and_si256(lo_matches, hi_matches);
 
             // Check if any position has candidates
-            let mask = _mm256_movemask_epi8(
-                _mm256_cmpeq_epi8(candidates, _mm256_setzero_si256())
-            ) as u32;
+            let mask =
+                _mm256_movemask_epi8(_mm256_cmpeq_epi8(candidates, _mm256_setzero_si256())) as u32;
 
             // Invert: we want positions that are NOT zero
             let candidate_mask = !mask;

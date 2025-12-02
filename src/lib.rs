@@ -10,14 +10,14 @@
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
-pub mod error;
-pub mod parser;
-pub mod hir;
-pub mod nfa;
 pub mod dfa;
-pub mod vm;
 pub mod engine;
+pub mod error;
+pub mod hir;
 pub mod literal;
+pub mod nfa;
+pub mod parser;
+pub mod vm;
 
 #[cfg(feature = "jit")]
 pub mod jit;
@@ -173,11 +173,9 @@ impl Regex {
 
     /// Returns the first match in the text.
     pub fn find<'t>(&self, text: &'t str) -> Option<Match<'t>> {
-        self.inner.find(text.as_bytes()).map(|(start, end)| Match {
-            text,
-            start,
-            end,
-        })
+        self.inner
+            .find(text.as_bytes())
+            .map(|(start, end)| Match { text, start, end })
     }
 
     /// Returns an iterator over all non-overlapping matches.
@@ -303,10 +301,7 @@ enum MatchesInner<'a> {
     /// Fast path: use TeddyFull prefilter iterator directly.
     TeddyFull(literal::FullMatchIter<'a, 'a>),
     /// Generic path: call find() repeatedly.
-    Generic {
-        regex: &'a Regex,
-        last_end: usize,
-    },
+    Generic { regex: &'a Regex, last_end: usize },
 }
 
 impl<'a> Matches<'a> {
@@ -317,10 +312,7 @@ impl<'a> Matches<'a> {
             MatchesInner::TeddyFull(regex.inner.find_full_matches(text.as_bytes()))
         } else {
             // Generic path
-            MatchesInner::Generic {
-                regex,
-                last_end: 0,
-            }
+            MatchesInner::Generic { regex, last_end: 0 }
         };
         Matches { inner, text }
     }
@@ -396,11 +388,7 @@ impl<'r, 't> Iterator for CapturesIter<'r, 't> {
 
                 // Advance past the match, but ensure progress on empty matches
                 let abs_end = offset + end;
-                self.last_end = if start == end {
-                    abs_end + 1
-                } else {
-                    abs_end
-                };
+                self.last_end = if start == end { abs_end + 1 } else { abs_end };
 
                 // Adjust all slot positions to absolute positions
                 let adjusted_slots: Vec<_> = slots

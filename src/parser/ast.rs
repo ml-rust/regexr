@@ -75,9 +75,9 @@ impl Expr {
             Expr::Repeat(rep) => rep.min == 0 || rep.expr.is_nullable(),
             Expr::Group(g) => g.expr.is_nullable(),
             Expr::Class(_) => false,
-            Expr::Anchor(_) => true, // Anchors don't consume input
+            Expr::Anchor(_) => true,     // Anchors don't consume input
             Expr::Lookaround(_) => true, // Lookarounds don't consume input
-            Expr::Backref(_) => false, // Could be nullable, but conservative
+            Expr::Backref(_) => false,   // Could be nullable, but conservative
             Expr::Dot => false,
             Expr::UnicodeProperty { .. } => false,
             Expr::PerlClass(_) => false,
@@ -101,7 +101,12 @@ pub struct Repeat {
 impl Repeat {
     /// Creates a new repetition.
     pub fn new(expr: Expr, min: u32, max: Option<u32>, greedy: bool) -> Self {
-        Self { expr, min, max, greedy }
+        Self {
+            expr,
+            min,
+            max,
+            greedy,
+        }
     }
 
     /// Creates a * quantifier (0 or more).
@@ -302,13 +307,11 @@ impl fmt::Display for Expr {
                 }
                 Ok(())
             }
-            Expr::Group(g) => {
-                match &g.kind {
-                    GroupKind::Capturing(_) => write!(f, "({})", g.expr),
-                    GroupKind::NamedCapturing { name, .. } => write!(f, "(?<{}>{})", name, g.expr),
-                    GroupKind::NonCapturing => write!(f, "(?:{})", g.expr),
-                }
-            }
+            Expr::Group(g) => match &g.kind {
+                GroupKind::Capturing(_) => write!(f, "({})", g.expr),
+                GroupKind::NamedCapturing { name, .. } => write!(f, "(?<{}>{})", name, g.expr),
+                GroupKind::NonCapturing => write!(f, "(?:{})", g.expr),
+            },
             Expr::Class(cls) => {
                 write!(f, "[")?;
                 if cls.negated {
@@ -342,16 +345,14 @@ impl fmt::Display for Expr {
                     write!(f, "\\p{{{}}}", name)
                 }
             }
-            Expr::PerlClass(kind) => {
-                match kind {
-                    PerlClassKind::Digit => write!(f, "\\d"),
-                    PerlClassKind::NotDigit => write!(f, "\\D"),
-                    PerlClassKind::Word => write!(f, "\\w"),
-                    PerlClassKind::NotWord => write!(f, "\\W"),
-                    PerlClassKind::Whitespace => write!(f, "\\s"),
-                    PerlClassKind::NotWhitespace => write!(f, "\\S"),
-                }
-            }
+            Expr::PerlClass(kind) => match kind {
+                PerlClassKind::Digit => write!(f, "\\d"),
+                PerlClassKind::NotDigit => write!(f, "\\D"),
+                PerlClassKind::Word => write!(f, "\\w"),
+                PerlClassKind::NotWord => write!(f, "\\W"),
+                PerlClassKind::Whitespace => write!(f, "\\s"),
+                PerlClassKind::NotWhitespace => write!(f, "\\S"),
+            },
         }
     }
 }

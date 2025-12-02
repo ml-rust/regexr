@@ -247,7 +247,8 @@ pub fn analyze_liveness(nfa: &Nfa) -> NfaLiveness {
         let state = &nfa.states[state_id as usize];
 
         // Current writes_before includes this state's writes
-        let current_writes = writes_before[state_id as usize].union(&states[state_id as usize].writes);
+        let current_writes =
+            writes_before[state_id as usize].union(&states[state_id as usize].writes);
 
         // Propagate to successors
         let mut propagate = |target: StateId| {

@@ -30,9 +30,9 @@
 //! ```
 
 mod avx2;
+mod fallback;
 mod memchr;
 mod teddy;
-mod fallback;
 
 #[cfg(test)]
 mod tests;

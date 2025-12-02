@@ -3,7 +3,6 @@
 //! AVX2-accelerated single byte search with scalar fallback.
 //! Processes 32 bytes at a time using SIMD when available.
 
-
 /// Finds the first occurrence of a byte in a slice.
 ///
 /// Uses AVX2 SIMD when available, falls back to scalar otherwise.
@@ -83,9 +82,7 @@ pub fn memchr2(needle1: u8, needle2: u8, haystack: &[u8]) -> Option<usize> {
     }
 
     // Scalar fallback
-    haystack
-        .iter()
-        .position(|&b| b == needle1 || b == needle2)
+    haystack.iter().position(|&b| b == needle1 || b == needle2)
 }
 
 /// AVX2-accelerated memchr2 implementation.
@@ -152,12 +149,7 @@ pub fn memchr3(needle1: u8, needle2: u8, needle3: u8, haystack: &[u8]) -> Option
 /// AVX2-accelerated memchr3 implementation.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn memchr3_avx2(
-    needle1: u8,
-    needle2: u8,
-    needle3: u8,
-    haystack: &[u8],
-) -> Option<usize> {
+unsafe fn memchr3_avx2(needle1: u8, needle2: u8, needle3: u8, haystack: &[u8]) -> Option<usize> {
     use std::arch::x86_64::*;
 
     let len = haystack.len();

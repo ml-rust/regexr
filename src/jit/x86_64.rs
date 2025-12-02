@@ -7,7 +7,9 @@ use crate::dfa::DfaStateId;
 use crate::error::{Error, ErrorKind, Result};
 use crate::jit::codegen::{MaterializedDfa, MaterializedState};
 use dynasm::dynasm;
-use dynasmrt::{AssemblyOffset, DynasmApi, DynasmLabelApi, DynamicLabel, ExecutableBuffer, x64::Assembler};
+use dynasmrt::{
+    x64::Assembler, AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, ExecutableBuffer,
+};
 
 /// Compiles a materialized DFA to x86-64 machine code.
 ///
@@ -46,8 +48,12 @@ use dynasmrt::{AssemblyOffset, DynasmApi, DynasmLabelApi, DynamicLabel, Executab
 pub fn compile_states(
     dfa: &MaterializedDfa,
 ) -> Result<(ExecutableBuffer, AssemblyOffset, Option<AssemblyOffset>)> {
-    let mut asm = Assembler::new()
-        .map_err(|e| Error::new(ErrorKind::Jit(format!("Failed to create assembler: {}", e)), ""))?;
+    let mut asm = Assembler::new().map_err(|e| {
+        Error::new(
+            ErrorKind::Jit(format!("Failed to create assembler: {}", e)),
+            "",
+        )
+    })?;
 
     // Create state label lookup using Vec instead of HashMap for O(1) lookup.
     // Find the max state ID to size the array appropriately.
@@ -76,13 +82,29 @@ pub fn compile_states(
 
     // Emit prologue for NonWord prev_class (primary entry point)
     let entry_point = asm.offset();
-    emit_prologue(&mut asm, dfa.start, &state_labels, restart_label, dispatch_label, dfa.has_word_boundary, true)?;
+    emit_prologue(
+        &mut asm,
+        dfa.start,
+        &state_labels,
+        restart_label,
+        dispatch_label,
+        dfa.has_word_boundary,
+        true,
+    )?;
 
     // Emit prologue for Word prev_class (secondary entry point, if needed)
     // Note: We pass false for emit_restart_label to avoid duplicate labels
     let entry_point_word = if let Some(start_word) = dfa.start_word {
         let offset = asm.offset();
-        emit_prologue(&mut asm, start_word, &state_labels, restart_label, dispatch_label, dfa.has_word_boundary, false)?;
+        emit_prologue(
+            &mut asm,
+            start_word,
+            &state_labels,
+            restart_label,
+            dispatch_label,
+            dfa.has_word_boundary,
+            false,
+        )?;
         Some(offset)
     } else {
         None
@@ -99,14 +121,25 @@ pub fn compile_states(
     }
 
     // Emit dead state - for unanchored, this restarts search at next position
-    emit_dead_state(&mut asm, dead_label, no_match_label, restart_label, dispatch_label, dfa.has_word_boundary)?;
+    emit_dead_state(
+        &mut asm,
+        dead_label,
+        no_match_label,
+        restart_label,
+        dispatch_label,
+        dfa.has_word_boundary,
+    )?;
 
     // Emit no-match epilogue (with start position tracking for unanchored)
     emit_no_match(&mut asm, no_match_label, dfa.has_word_boundary)?;
 
     // Finalize and get executable buffer (W^X compliant)
-    let code = asm.finalize()
-        .map_err(|_| Error::new(ErrorKind::Jit("Failed to finalize assembly".to_string()), ""))?;
+    let code = asm.finalize().map_err(|_| {
+        Error::new(
+            ErrorKind::Jit("Failed to finalize assembly".to_string()),
+            "",
+        )
+    })?;
 
     Ok((code, entry_point, entry_point_word))
 }
@@ -137,9 +170,15 @@ fn emit_prologue(
     has_word_boundary: bool,
     emit_restart_label: bool,
 ) -> Result<()> {
-    let start_label = state_labels.get(start_state as usize)
+    let start_label = state_labels
+        .get(start_state as usize)
         .and_then(|opt| opt.as_ref())
-        .ok_or_else(|| Error::new(ErrorKind::Jit("Start state label not found".to_string()), ""))?;
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::Jit("Start state label not found".to_string()),
+                "",
+            )
+        })?;
 
     // For word boundary patterns, save r13 (callee-saved register in System V ABI)
     // Each entry point (primary and secondary) must save r13 since both can be called independently
@@ -221,12 +260,24 @@ fn emit_dispatch(
     start_word: DfaStateId,
     state_labels: &[Option<DynamicLabel>],
 ) -> Result<()> {
-    let start_label = state_labels.get(start as usize)
+    let start_label = state_labels
+        .get(start as usize)
         .and_then(|opt| opt.as_ref())
-        .ok_or_else(|| Error::new(ErrorKind::Jit("Start state label not found".to_string()), ""))?;
-    let start_word_label = state_labels.get(start_word as usize)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::Jit("Start state label not found".to_string()),
+                "",
+            )
+        })?;
+    let start_word_label = state_labels
+        .get(start_word as usize)
         .and_then(|opt| opt.as_ref())
-        .ok_or_else(|| Error::new(ErrorKind::Jit("Start word state label not found".to_string()), ""))?;
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::Jit("Start word state label not found".to_string()),
+                "",
+            )
+        })?;
 
     dynasm!(asm
         ; .align 16
@@ -248,7 +299,9 @@ fn emit_dispatch(
 ///
 /// The ranges are the byte ranges that self-loop, and other_targets are
 /// non-self-loop transitions that need to be checked after the fast-forward.
-fn analyze_self_loop(state: &MaterializedState) -> Option<(Vec<(u8, u8)>, Vec<(u8, u8, DfaStateId)>)> {
+fn analyze_self_loop(
+    state: &MaterializedState,
+) -> Option<(Vec<(u8, u8)>, Vec<(u8, u8, DfaStateId)>)> {
     let mut self_loop_bytes = Vec::new();
     let mut other_transitions = Vec::new();
 
@@ -329,9 +382,15 @@ fn emit_state(
     dead_label: DynamicLabel,
     no_match_label: DynamicLabel,
 ) -> Result<()> {
-    let state_label = state_labels.get(state.id as usize)
+    let state_label = state_labels
+        .get(state.id as usize)
         .and_then(|opt| opt.as_ref())
-        .ok_or_else(|| Error::new(ErrorKind::Jit(format!("Label for state {} not found", state.id)), ""))?;
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::Jit(format!("Label for state {} not found", state.id)),
+                "",
+            )
+        })?;
 
     // 16-byte alignment for optimal CPU instruction fetch
     // This is CRITICAL for performance - state labels are hot loop entries
@@ -370,7 +429,15 @@ fn emit_state(
     // Check for self-loop optimization opportunity
     if let Some((self_loop_ranges, other_transitions)) = analyze_self_loop(state) {
         // Emit fast-forward loop for self-loop transitions
-        emit_fast_forward_loop(asm, state, &self_loop_ranges, &other_transitions, state_labels, dead_label, no_match_label)?;
+        emit_fast_forward_loop(
+            asm,
+            state,
+            &self_loop_ranges,
+            &other_transitions,
+            state_labels,
+            dead_label,
+            no_match_label,
+        )?;
     } else {
         // Standard path: load byte and check transitions
         // Load next byte: al = input[pos]
@@ -455,7 +522,6 @@ fn emit_fast_forward_loop(
         dynasm!(asm
             ; lea r9, [<bitmap_data]
         );
-
 
         // Fast-forward loop using bitmap lookup
         dynasm!(asm
@@ -584,9 +650,15 @@ fn emit_fast_forward_loop(
         );
 
         for &(start, end, target) in other_transitions {
-            let target_label = state_labels.get(target as usize)
+            let target_label = state_labels
+                .get(target as usize)
                 .and_then(|opt| opt.as_ref())
-                .ok_or_else(|| Error::new(ErrorKind::Jit(format!("Label for state {} not found", target)), ""))?;
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Jit(format!("Label for state {} not found", target)),
+                        "",
+                    )
+                })?;
 
             if start == end {
                 dynasm!(asm
@@ -628,9 +700,15 @@ fn emit_sparse_transitions(
     let ranges = compute_byte_ranges(state);
 
     for (start, end, target) in ranges {
-        let target_label = state_labels.get(target as usize)
+        let target_label = state_labels
+            .get(target as usize)
             .and_then(|opt| opt.as_ref())
-            .ok_or_else(|| Error::new(ErrorKind::Jit(format!("Label for state {} not found", target)), ""))?;
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Jit(format!("Label for state {} not found", target)),
+                    "",
+                )
+            })?;
 
         if start == end {
             // Single byte
@@ -676,9 +754,15 @@ fn emit_dense_transitions(
     let ranges = compute_byte_ranges(state);
 
     for (start, end, target) in ranges {
-        let target_label = state_labels.get(target as usize)
+        let target_label = state_labels
+            .get(target as usize)
             .and_then(|opt| opt.as_ref())
-            .ok_or_else(|| Error::new(ErrorKind::Jit(format!("Label for state {} not found", target)), ""))?;
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Jit(format!("Label for state {} not found", target)),
+                    "",
+                )
+            })?;
 
         if start == end {
             // Single byte

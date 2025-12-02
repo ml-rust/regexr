@@ -16,9 +16,9 @@
 //! - `x86_64.rs` - dynasm-based x86-64 code generation
 //! - `helpers.rs` - JIT context and extern helper functions
 
+mod helpers;
 mod jit;
 mod x86_64;
-mod helpers;
 
-pub use jit::{TaggedNfaJit, compile_tagged_nfa, compile_tagged_nfa_with_liveness};
 pub use helpers::JitContext;
+pub use jit::{compile_tagged_nfa, compile_tagged_nfa_with_liveness, TaggedNfaJit};

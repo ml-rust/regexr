@@ -71,7 +71,11 @@ impl CodepointClass {
     /// Creates a new codepoint class with precomputed ASCII bitmap.
     pub fn new(ranges: Vec<(u32, u32)>, negated: bool) -> Self {
         let ascii_bitmap = Self::compute_ascii_bitmap(&ranges);
-        Self { ranges, negated, ascii_bitmap }
+        Self {
+            ranges,
+            negated,
+            ascii_bitmap,
+        }
     }
 
     /// Computes the ASCII bitmap from ranges.
@@ -112,15 +116,17 @@ impl CodepointClass {
         }
 
         // Slow path for non-ASCII: binary search over ranges
-        self.ranges.binary_search_by(|&(start, end)| {
-            if cp < start {
-                std::cmp::Ordering::Greater
-            } else if cp > end {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Equal
-            }
-        }).is_ok()
+        self.ranges
+            .binary_search_by(|&(start, end)| {
+                if cp < start {
+                    std::cmp::Ordering::Greater
+                } else if cp > end {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+            .is_ok()
     }
 
     /// Checks if a codepoint is in this class.
@@ -138,17 +144,24 @@ impl CodepointClass {
         }
 
         // Slow path for non-ASCII: binary search over ranges
-        let in_ranges = self.ranges.binary_search_by(|&(start, end)| {
-            if cp < start {
-                std::cmp::Ordering::Greater
-            } else if cp > end {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Equal
-            }
-        }).is_ok();
+        let in_ranges = self
+            .ranges
+            .binary_search_by(|&(start, end)| {
+                if cp < start {
+                    std::cmp::Ordering::Greater
+                } else if cp > end {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
+            .is_ok();
 
-        if self.negated { !in_ranges } else { in_ranges }
+        if self.negated {
+            !in_ranges
+        } else {
+            in_ranges
+        }
     }
 }
 
@@ -285,15 +298,17 @@ pub fn translate(ast: &Ast) -> Result<Hir> {
 /// Returns 0 if there are no capture groups.
 pub fn compute_capture_count(expr: &HirExpr) -> u32 {
     match expr {
-        HirExpr::Empty | HirExpr::Literal(_) | HirExpr::Class(_)
-        | HirExpr::UnicodeCpClass(_) | HirExpr::Anchor(_) | HirExpr::Backref(_) => 0,
+        HirExpr::Empty
+        | HirExpr::Literal(_)
+        | HirExpr::Class(_)
+        | HirExpr::UnicodeCpClass(_)
+        | HirExpr::Anchor(_)
+        | HirExpr::Backref(_) => 0,
         HirExpr::Concat(exprs) | HirExpr::Alt(exprs) => {
             exprs.iter().map(compute_capture_count).max().unwrap_or(0)
         }
         HirExpr::Repeat(rep) => compute_capture_count(&rep.expr),
-        HirExpr::Capture(cap) => {
-            cap.index.max(compute_capture_count(&cap.expr))
-        }
+        HirExpr::Capture(cap) => cap.index.max(compute_capture_count(&cap.expr)),
         HirExpr::Lookaround(la) => compute_capture_count(&la.expr),
     }
 }

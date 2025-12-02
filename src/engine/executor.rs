@@ -9,9 +9,11 @@ use crate::dfa::{EagerDfa, LazyDfa};
 use crate::error::Result;
 use crate::hir::Hir;
 use crate::literal::{extract_literals, Prefilter};
-use crate::nfa::{self, Nfa};
 use crate::nfa::tagged::TaggedNfaEngine;
-use crate::vm::{BacktrackingVm, CodepointClassMatcher, PikeVm, PikeVmContext, ShiftOr, ShiftOrWide};
+use crate::nfa::{self, Nfa};
+use crate::vm::{
+    BacktrackingVm, CodepointClassMatcher, PikeVm, PikeVmContext, ShiftOr, ShiftOrWide,
+};
 
 #[cfg(all(feature = "jit", target_arch = "x86_64"))]
 use crate::jit;
@@ -151,9 +153,7 @@ impl CompiledRegex {
             CompiledInner::PikeVm(vm) => vm.is_match(input),
             CompiledInner::ShiftOr(so) => so.is_match(input),
             CompiledInner::ShiftOrWide(so) => so.is_match(input),
-            CompiledInner::LazyDfa(dfa) => {
-                dfa.write().unwrap().find(input).is_some()
-            }
+            CompiledInner::LazyDfa(dfa) => dfa.write().unwrap().find(input).is_some(),
             CompiledInner::EagerDfa(dfa) => dfa.find(input).is_some(),
             CompiledInner::CodepointClass(matcher) => matcher.is_match(input),
             CompiledInner::BacktrackingVm(vm) => vm.find(input).is_some(),
@@ -182,7 +182,10 @@ impl CompiledRegex {
     ///
     /// Only valid when `is_full_match_prefilter()` returns true.
     #[inline]
-    pub fn find_full_matches<'a>(&'a self, input: &'a [u8]) -> crate::literal::FullMatchIter<'a, 'a> {
+    pub fn find_full_matches<'a>(
+        &'a self,
+        input: &'a [u8],
+    ) -> crate::literal::FullMatchIter<'a, 'a> {
         self.prefilter.find_full_matches(input)
     }
 
@@ -245,9 +248,7 @@ impl CompiledRegex {
             CompiledInner::PikeVm(vm) => vm.find(input),
             CompiledInner::ShiftOr(so) => so.find(input),
             CompiledInner::ShiftOrWide(so) => so.find(input),
-            CompiledInner::LazyDfa(dfa) => {
-                dfa.write().unwrap().find(input)
-            }
+            CompiledInner::LazyDfa(dfa) => dfa.write().unwrap().find(input),
             CompiledInner::EagerDfa(dfa) => dfa.find(input),
             CompiledInner::CodepointClass(matcher) => matcher.find(input),
             CompiledInner::BacktrackingVm(vm) => vm.find(input),
@@ -321,7 +322,10 @@ impl CompiledRegex {
                         caps
                     })
             }
-            CompiledInner::ShiftOr(_) | CompiledInner::ShiftOrWide(_) | CompiledInner::LazyDfa(_) | CompiledInner::EagerDfa(_) => {
+            CompiledInner::ShiftOr(_)
+            | CompiledInner::ShiftOrWide(_)
+            | CompiledInner::LazyDfa(_)
+            | CompiledInner::EagerDfa(_) => {
                 // Fast path: if we have BacktrackingVm, use it for single-pass capture extraction
                 if let Some(ref backtracking_vm) = self.backtracking_vm {
                     return backtracking_vm.captures(input);
@@ -400,20 +404,18 @@ impl CompiledRegex {
             CompiledInner::PikeVm(vm) => vm.find_at(input, pos),
             CompiledInner::ShiftOr(so) => so.try_match_at(input, pos),
             CompiledInner::ShiftOrWide(so) => so.try_match_at(input, pos),
-            CompiledInner::LazyDfa(dfa) => {
-                dfa.write().unwrap().find_at(input, pos).map(|end| (pos, end))
-            }
-            CompiledInner::EagerDfa(dfa) => {
-                dfa.find_at(input, pos).map(|end| (pos, end))
-            }
+            CompiledInner::LazyDfa(dfa) => dfa
+                .write()
+                .unwrap()
+                .find_at(input, pos)
+                .map(|end| (pos, end)),
+            CompiledInner::EagerDfa(dfa) => dfa.find_at(input, pos).map(|end| (pos, end)),
             CompiledInner::CodepointClass(matcher) => {
                 // CodepointClass doesn't support word boundaries, use sliced input
                 let slice = &input[pos..];
                 matcher.find(slice).map(|(s, e)| (pos + s, pos + e))
             }
-            CompiledInner::BacktrackingVm(vm) => {
-                vm.find_at(input, pos)
-            }
+            CompiledInner::BacktrackingVm(vm) => vm.find_at(input, pos),
             CompiledInner::TaggedNfaInterp(engine) => engine.find_at(input, pos),
             #[cfg(all(feature = "jit", target_arch = "x86_64"))]
             CompiledInner::Jit(jit) => jit.find_at(input, pos),
@@ -438,7 +440,6 @@ impl CompiledRegex {
     }
 }
 
-
 /// Compiles an NFA into an executable regex (legacy API).
 /// Note: This cannot use Shift-Or as it requires HIR for Glushkov construction.
 /// Also cannot use prefilter (requires HIR for literal extraction).
@@ -456,23 +457,32 @@ pub fn compile(nfa: Nfa) -> Result<CompiledRegex> {
             // NFA-based compilation can't use Shift-Or (needs Glushkov from HIR)
             // Fall back to LazyDfa, keep NFA for captures
             let capture_nfa = Some(nfa.clone());
-            (CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))), capture_nfa)
+            (
+                CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))),
+                capture_nfa,
+            )
         }
         EngineType::LazyDfa => {
             let capture_nfa = Some(nfa.clone());
-            (CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))), capture_nfa)
+            (
+                CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))),
+                capture_nfa,
+            )
         }
         #[cfg(feature = "jit")]
         EngineType::Jit => {
             // JIT not implemented yet, fall back to LazyDfa
             let capture_nfa = Some(nfa.clone());
-            (CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))), capture_nfa)
+            (
+                CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))),
+                capture_nfa,
+            )
         }
     };
 
     Ok(CompiledRegex {
         inner,
-        prefilter: Prefilter::None,  // Can't extract literals from NFA
+        prefilter: Prefilter::None, // Can't extract literals from NFA
         capture_nfa: RwLock::new(capture_nfa),
         capture_vm: RwLock::new(None),
         capture_ctx: RwLock::new(None),
@@ -490,7 +500,9 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
     // This is MUCH faster than byte-level DFA for Unicode patterns like [^α-ω].
     if let Some(ref codepoint_class) = hir.props.codepoint_class {
         return Ok(CompiledRegex {
-            inner: CompiledInner::CodepointClass(CodepointClassMatcher::new(codepoint_class.clone())),
+            inner: CompiledInner::CodepointClass(CodepointClassMatcher::new(
+                codepoint_class.clone(),
+            )),
             prefilter: Prefilter::None,
             capture_nfa: RwLock::new(None),
             capture_vm: RwLock::new(None),
@@ -546,7 +558,10 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
         EngineType::BacktrackingVm => {
             // BacktrackingVm for patterns with backreferences
             // This maintains parity with BacktrackingJit for JIT builds
-            (CompiledInner::BacktrackingVm(BacktrackingVm::new(hir)), None)
+            (
+                CompiledInner::BacktrackingVm(BacktrackingVm::new(hir)),
+                None,
+            )
         }
         EngineType::ShiftOr => {
             // Use Glushkov NFA for Shift-Or
@@ -560,7 +575,10 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
                     // Fall back to LazyDfa
                     let nfa = nfa::compile(hir)?;
                     let capture_nfa = Some(nfa.clone());
-                    (CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))), capture_nfa)
+                    (
+                        CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))),
+                        capture_nfa,
+                    )
                 }
             }
         }
@@ -576,7 +594,10 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
                     // Fall back to LazyDfa
                     let nfa = nfa::compile(hir)?;
                     let capture_nfa = Some(nfa.clone());
-                    (CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))), capture_nfa)
+                    (
+                        CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))),
+                        capture_nfa,
+                    )
                 }
             }
         }
@@ -588,7 +609,10 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
             // state explosion during EagerDfa materialization. EagerDfa creates
             // all reachable states upfront, which can be millions for large Unicode classes.
             if hir.props.has_large_unicode_class {
-                (CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))), capture_nfa)
+                (
+                    CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))),
+                    capture_nfa,
+                )
             } else {
                 // Use EagerDfa for better non-JIT performance on simple patterns.
                 // EagerDfa pre-computes all states upfront, eliminating hash lookups.
@@ -605,7 +629,10 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
 
             // For patterns with large Unicode classes, use LazyDfa to avoid state explosion
             if hir.props.has_large_unicode_class {
-                (CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))), capture_nfa)
+                (
+                    CompiledInner::LazyDfa(RwLock::new(LazyDfa::new(nfa))),
+                    capture_nfa,
+                )
             } else {
                 let mut lazy = LazyDfa::new(nfa);
                 let eager = EagerDfa::from_lazy(&mut lazy);
@@ -670,7 +697,9 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
     // 0. Single character class → CodepointClassMatcher (fastest for Unicode)
     if let Some(ref codepoint_class) = hir.props.codepoint_class {
         return Ok(CompiledRegex {
-            inner: CompiledInner::CodepointClass(CodepointClassMatcher::new(codepoint_class.clone())),
+            inner: CompiledInner::CodepointClass(CodepointClassMatcher::new(
+                codepoint_class.clone(),
+            )),
             prefilter: Prefilter::None,
             capture_nfa: RwLock::new(None),
             capture_vm: RwLock::new(None),
@@ -792,7 +821,10 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
                 // TaggedNfa JIT failed (e.g., lookahead with captures not yet supported).
                 // Fall back to TaggedNfa interpreter which handles all cases correctly.
                 #[cfg(debug_assertions)]
-                eprintln!("[regexr] TaggedNfaJit failed, falling back to interpreter: {}", _e);
+                eprintln!(
+                    "[regexr] TaggedNfaJit failed, falling back to interpreter: {}",
+                    _e
+                );
                 let engine = TaggedNfaEngine::new(nfa);
                 return Ok(CompiledRegex {
                     inner: CompiledInner::TaggedNfaInterp(engine),
@@ -1140,18 +1172,18 @@ mod tests {
         fn test_non_greedy_star() {
             // Non-greedy quantifier
             let re = make_jit_regex(r"a*?b");
-            assert_eq!(re.find(b"b"), Some((0, 1)));       // Zero a's
-            assert_eq!(re.find(b"ab"), Some((0, 2)));      // One a
-            assert_eq!(re.find(b"aaab"), Some((0, 4)));    // Multiple a's
+            assert_eq!(re.find(b"b"), Some((0, 1))); // Zero a's
+            assert_eq!(re.find(b"ab"), Some((0, 2))); // One a
+            assert_eq!(re.find(b"aaab"), Some((0, 4))); // Multiple a's
         }
 
         #[test]
         fn test_non_greedy_plus() {
             // Non-greedy plus
             let re = make_jit_regex(r"a+?b");
-            assert_eq!(re.find(b"ab"), Some((0, 2)));      // One a
-            assert_eq!(re.find(b"aaab"), Some((0, 4)));    // Multiple a's
-            assert_eq!(re.find(b"b"), None);               // Need at least one a
+            assert_eq!(re.find(b"ab"), Some((0, 2))); // One a
+            assert_eq!(re.find(b"aaab"), Some((0, 4))); // Multiple a's
+            assert_eq!(re.find(b"b"), None); // Need at least one a
         }
 
         #[test]

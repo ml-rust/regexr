@@ -64,16 +64,30 @@ impl std::fmt::Debug for Prefilter {
             Self::None => write!(f, "Prefilter::None"),
             Self::SingleByte(b) => write!(f, "Prefilter::SingleByte({:#04x})", b),
             Self::InnerByte { byte, max_lookback } => {
-                write!(f, "Prefilter::InnerByte({:#04x}, lookback={})", byte, max_lookback)
+                write!(
+                    f,
+                    "Prefilter::InnerByte({:#04x}, lookback={})",
+                    byte, max_lookback
+                )
             }
             Self::Literal(_) => write!(f, "Prefilter::Literal"),
             Self::StartsWithDigit => write!(f, "Prefilter::StartsWithDigit"),
-            Self::AhoCorasick { ac } => write!(f, "Prefilter::AhoCorasick({} patterns)", ac.patterns_len()),
-            Self::AhoCorasickFull { ac } => write!(f, "Prefilter::AhoCorasickFull({} patterns)", ac.patterns_len()),
+            Self::AhoCorasick { ac } => {
+                write!(f, "Prefilter::AhoCorasick({} patterns)", ac.patterns_len())
+            }
+            Self::AhoCorasickFull { ac } => write!(
+                f,
+                "Prefilter::AhoCorasickFull({} patterns)",
+                ac.patterns_len()
+            ),
             #[cfg(feature = "simd")]
             Self::Teddy(t) => write!(f, "Prefilter::Teddy({} patterns)", t.pattern_count()),
             #[cfg(feature = "simd")]
-            Self::TeddyFull { teddy, .. } => write!(f, "Prefilter::TeddyFull({} patterns)", teddy.pattern_count()),
+            Self::TeddyFull { teddy, .. } => write!(
+                f,
+                "Prefilter::TeddyFull({} patterns)",
+                teddy.pattern_count()
+            ),
         }
     }
 }
@@ -156,7 +170,10 @@ impl Prefilter {
                 #[cfg(not(feature = "simd"))]
                 {
                     // Scalar fallback: search for any digit
-                    slice.iter().position(|&b| b >= b'0' && b <= b'9').map(|i| pos + i)
+                    slice
+                        .iter()
+                        .position(|&b| b >= b'0' && b <= b'9')
+                        .map(|i| pos + i)
                 }
             }
             Self::AhoCorasick { ac } => {
@@ -208,13 +225,16 @@ impl Prefilter {
 
     /// Returns true if this prefilter can provide complete matches.
     pub fn is_full_match(&self) -> bool {
-        matches!(self, Self::AhoCorasickFull { .. })
-            || {
-                #[cfg(feature = "simd")]
-                { matches!(self, Self::TeddyFull { .. }) }
-                #[cfg(not(feature = "simd"))]
-                { false }
+        matches!(self, Self::AhoCorasickFull { .. }) || {
+            #[cfg(feature = "simd")]
+            {
+                matches!(self, Self::TeddyFull { .. })
             }
+            #[cfg(not(feature = "simd"))]
+            {
+                false
+            }
+        }
     }
 
     /// Returns an iterator over all candidate positions.
@@ -315,20 +335,16 @@ enum FullMatchIterInner<'a, 'h> {
 impl<'a, 'h> FullMatchIter<'a, 'h> {
     pub(crate) fn new(prefilter: &'a Prefilter, haystack: &'h [u8]) -> Self {
         let inner = match prefilter {
-            Prefilter::AhoCorasickFull { ac } => {
-                FullMatchIterInner::AhoCorasickFull {
-                    ac_iter: ac.find_iter(haystack),
-                    last_end: 0,
-                }
-            }
+            Prefilter::AhoCorasickFull { ac } => FullMatchIterInner::AhoCorasickFull {
+                ac_iter: ac.find_iter(haystack),
+                last_end: 0,
+            },
             #[cfg(feature = "simd")]
-            Prefilter::TeddyFull { teddy, lengths } => {
-                FullMatchIterInner::TeddyFull {
-                    teddy_iter: teddy.find_iter(haystack),
-                    lengths,
-                    last_end: 0,
-                }
-            }
+            Prefilter::TeddyFull { teddy, lengths } => FullMatchIterInner::TeddyFull {
+                teddy_iter: teddy.find_iter(haystack),
+                lengths,
+                last_end: 0,
+            },
             _ => FullMatchIterInner::Empty,
         };
         Self { inner }
@@ -351,7 +367,11 @@ impl<'a, 'h> Iterator for FullMatchIter<'a, 'h> {
                 }
             }
             #[cfg(feature = "simd")]
-            FullMatchIterInner::TeddyFull { teddy_iter, lengths, last_end } => {
+            FullMatchIterInner::TeddyFull {
+                teddy_iter,
+                lengths,
+                last_end,
+            } => {
                 // Skip matches that overlap with the previous match
                 loop {
                     let (pattern_id, pos) = teddy_iter.next()?;
@@ -458,7 +478,7 @@ mod tests {
         let literals = Literals {
             prefixes: vec![b"hello".to_vec(), b"world".to_vec()],
             suffixes: vec![],
-            prefix_complete: false,  // Not a complete literal match
+            prefix_complete: false, // Not a complete literal match
             starts_with_digit: false,
         };
         let pf = Prefilter::from_literals(&literals);
@@ -475,5 +495,4 @@ mod tests {
         let candidates: Vec<_> = pf.find_candidates(b"hello world").collect();
         assert_eq!(candidates, vec![4, 7]);
     }
-
 }

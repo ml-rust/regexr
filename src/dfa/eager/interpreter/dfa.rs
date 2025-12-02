@@ -149,7 +149,8 @@ impl EagerDfa {
 
             for byte in 0..256 {
                 if let Some(next_idx) = trans[byte] {
-                    let next_is_match = match_flags.get(next_idx as usize).copied().unwrap_or(false);
+                    let next_is_match =
+                        match_flags.get(next_idx as usize).copied().unwrap_or(false);
                     let mut tagged = next_idx;
                     if next_is_match {
                         tagged |= TAG_MATCH;
@@ -183,7 +184,11 @@ impl EagerDfa {
         };
 
         // Tag the start state if it's a match state
-        let start = if match_flags.get(start_idx as usize).copied().unwrap_or(false) {
+        let start = if match_flags
+            .get(start_idx as usize)
+            .copied()
+            .unwrap_or(false)
+        {
             start_idx | TAG_MATCH
         } else {
             start_idx

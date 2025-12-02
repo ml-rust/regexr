@@ -27,8 +27,8 @@ use crate::nfa::{Nfa, NfaInstruction, StateId as NfaStateId};
 
 use super::super::shared::{
     epsilon_closure_with_context, flush_cache, get_or_create_state_with_class, is_dead_state,
-    is_tagged_match, is_unknown_state, state_index, tag_state, untag_state, CharClass,
-    DfaStateId, LazyDfaContext, PositionContext, DEAD_STATE, UNKNOWN_STATE,
+    is_tagged_match, is_unknown_state, state_index, tag_state, untag_state, CharClass, DfaStateId,
+    LazyDfaContext, PositionContext, DEAD_STATE, UNKNOWN_STATE,
 };
 
 /// A lazy DFA that builds states on demand.
@@ -463,8 +463,12 @@ impl LazyDfa {
                 None
             };
 
-            let start_closure =
-                epsilon_closure_with_context(&self.ctx.nfa, &start_set, is_at_boundary, Some(pos_ctx));
+            let start_closure = epsilon_closure_with_context(
+                &self.ctx.nfa,
+                &start_set,
+                is_at_boundary,
+                Some(pos_ctx),
+            );
             get_or_create_state_with_class(&mut self.ctx, start_closure, prev_class)
         } else if self.ctx.has_word_boundary && start > 0 {
             self.get_start_state_with_prev_class(prev_class)
@@ -674,13 +678,12 @@ impl LazyDfa {
 
             let is_at_boundary = prev_class != next_class;
 
-            let needs_word_boundary =
-                self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
-                    matches!(instr, NfaInstruction::WordBoundary)
-                });
+            let needs_word_boundary = self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
+                matches!(instr, NfaInstruction::WordBoundary)
+            });
 
-            let needs_not_word_boundary =
-                self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
+            let needs_not_word_boundary = self
+                .state_needs_assertion(&dfa_state.nfa_states, |instr| {
                     matches!(instr, NfaInstruction::NotWordBoundary)
                 });
 
@@ -693,19 +696,17 @@ impl LazyDfa {
         }
 
         if self.ctx.has_anchors {
-            let needs_end_of_text =
-                self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
-                    matches!(instr, NfaInstruction::EndOfText)
-                });
+            let needs_end_of_text = self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
+                matches!(instr, NfaInstruction::EndOfText)
+            });
 
             if needs_end_of_text && pos != input.len() {
                 return false;
             }
 
-            let needs_end_of_line =
-                self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
-                    matches!(instr, NfaInstruction::EndOfLine)
-                });
+            let needs_end_of_line = self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
+                matches!(instr, NfaInstruction::EndOfLine)
+            });
 
             if needs_end_of_line {
                 let at_end_of_line = pos == input.len() || input.get(pos) == Some(&b'\n');
@@ -768,7 +769,10 @@ impl LazyDfa {
                 }
                 nfa_state.epsilon.iter().any(|&eps_target| {
                     self.ctx.nfa.get(eps_target).map_or(false, |eps_state| {
-                        matches!(&eps_state.instruction, Some(NfaInstruction::NotWordBoundary))
+                        matches!(
+                            &eps_state.instruction,
+                            Some(NfaInstruction::NotWordBoundary)
+                        )
                     })
                 })
             })
@@ -785,15 +789,13 @@ impl LazyDfa {
             None => return (false, false),
         };
 
-        let needs_end_of_text =
-            self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
-                matches!(instr, NfaInstruction::EndOfText)
-            });
+        let needs_end_of_text = self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
+            matches!(instr, NfaInstruction::EndOfText)
+        });
 
-        let needs_end_of_line =
-            self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
-                matches!(instr, NfaInstruction::EndOfLine)
-            });
+        let needs_end_of_line = self.state_needs_assertion(&dfa_state.nfa_states, |instr| {
+            matches!(instr, NfaInstruction::EndOfLine)
+        });
 
         (needs_end_of_text, needs_end_of_line)
     }

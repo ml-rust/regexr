@@ -23,7 +23,7 @@ fn test_html_tag_basic() {
     assert!(re.is_match("<img src=\"image.png\" alt=\"test\">"));
 
     assert!(!re.is_match("plain text"));
-    assert!(!re.is_match("<>"));  // Empty tag
+    assert!(!re.is_match("<>")); // Empty tag
 }
 
 #[test]
@@ -80,10 +80,10 @@ fn test_json_string_basic() {
 
     assert!(re.is_match(r#""hello""#));
     assert!(re.is_match(r#""hello world""#));
-    assert!(re.is_match(r#""""#));  // Empty string
+    assert!(re.is_match(r#""""#)); // Empty string
 
-    assert!(!re.is_match("hello"));  // No quotes
-    assert!(!re.is_match(r#""unclosed"#));  // Unclosed
+    assert!(!re.is_match("hello")); // No quotes
+    assert!(!re.is_match(r#""unclosed"#)); // Unclosed
 }
 
 #[test]
@@ -91,10 +91,10 @@ fn test_json_string_with_escapes() {
     let re = regex(r#""([^"\\]|\\.)*""#);
 
     // Escaped characters
-    assert!(re.is_match(r#""hello\"world""#));  // Escaped quote
-    assert!(re.is_match(r#""path\\to\\file""#));  // Escaped backslash
-    assert!(re.is_match(r#""line1\nline2""#));  // Escaped newline
-    assert!(re.is_match(r#""tab\there""#));  // Escaped tab
+    assert!(re.is_match(r#""hello\"world""#)); // Escaped quote
+    assert!(re.is_match(r#""path\\to\\file""#)); // Escaped backslash
+    assert!(re.is_match(r#""line1\nline2""#)); // Escaped newline
+    assert!(re.is_match(r#""tab\there""#)); // Escaped tab
 }
 
 #[test]
@@ -128,9 +128,9 @@ fn test_json_string_in_array() {
 fn test_json_string_unicode() {
     let re = regex(r#""([^"\\]|\\.)*""#);
 
-    assert!(re.is_match(r#""hello \u0041""#));  // Unicode escape
-    assert!(re.is_match(r#""emoji: 😀""#));  // Direct emoji
-    assert!(re.is_match(r#""日本語""#));  // Japanese
+    assert!(re.is_match(r#""hello \u0041""#)); // Unicode escape
+    assert!(re.is_match(r#""emoji: 😀""#)); // Direct emoji
+    assert!(re.is_match(r#""日本語""#)); // Japanese
 }
 
 // =============================================================================

@@ -85,9 +85,10 @@ fn test_split_on_whitespace() {
     let re = regex(r"\p{Whitespace}+");
 
     let text = "Hello\u{2003}World\u{00A0}Test";
-    let parts: Vec<&str> = text.split(|c: char| {
-        re.is_match(&c.to_string())
-    }).filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = text
+        .split(|c: char| re.is_match(&c.to_string()))
+        .filter(|s| !s.is_empty())
+        .collect();
 
     assert!(parts.len() >= 1);
 }
@@ -110,7 +111,10 @@ fn test_normalize_whitespace() {
 fn test_word_boundaries_basic() {
     let re = regex(r"\b\w+\b");
 
-    let matches: Vec<_> = re.find_iter("hello world test").map(|m| m.as_str()).collect();
+    let matches: Vec<_> = re
+        .find_iter("hello world test")
+        .map(|m| m.as_str())
+        .collect();
     assert_eq!(matches, vec!["hello", "world", "test"]);
 }
 
@@ -118,7 +122,10 @@ fn test_word_boundaries_basic() {
 fn test_word_boundaries_with_punctuation() {
     let re = regex(r"\b\w+\b");
 
-    let matches: Vec<_> = re.find_iter("Hello, world! How's it?").map(|m| m.as_str()).collect();
+    let matches: Vec<_> = re
+        .find_iter("Hello, world! How's it?")
+        .map(|m| m.as_str())
+        .collect();
     assert!(matches.contains(&"Hello"));
     assert!(matches.contains(&"world"));
     assert!(matches.contains(&"How"));
@@ -139,7 +146,10 @@ fn test_word_boundaries_unicode() {
 fn test_alphanumeric_tokens() {
     let re = regex(r"[a-zA-Z0-9]+");
 
-    let matches: Vec<_> = re.find_iter("test123 hello456 world").map(|m| m.as_str()).collect();
+    let matches: Vec<_> = re
+        .find_iter("test123 hello456 world")
+        .map(|m| m.as_str())
+        .collect();
     assert_eq!(matches, vec!["test123", "hello456", "world"]);
 }
 
@@ -151,7 +161,10 @@ fn test_alphanumeric_tokens() {
 fn test_word_followed_by_punctuation() {
     let re = regex(r"\w+(?=[.,!?])");
 
-    let matches: Vec<_> = re.find_iter("Hello, world! How are you?").map(|m| m.as_str()).collect();
+    let matches: Vec<_> = re
+        .find_iter("Hello, world! How are you?")
+        .map(|m| m.as_str())
+        .collect();
     assert!(matches.contains(&"Hello"));
     assert!(matches.contains(&"world"));
     assert!(matches.contains(&"you"));
@@ -161,7 +174,10 @@ fn test_word_followed_by_punctuation() {
 fn test_word_after_whitespace() {
     let re = regex(r"(?<=\s)\w+");
 
-    let matches: Vec<_> = re.find_iter("hello world test").map(|m| m.as_str()).collect();
+    let matches: Vec<_> = re
+        .find_iter("hello world test")
+        .map(|m| m.as_str())
+        .collect();
     assert!(matches.contains(&"world"));
     assert!(matches.contains(&"test"));
     assert!(!matches.iter().any(|&m| m == "hello")); // First word has no preceding space
@@ -171,7 +187,10 @@ fn test_word_after_whitespace() {
 fn test_quoted_strings() {
     let re = regex(r#""[^"]+""#);
 
-    let matches: Vec<_> = re.find_iter(r#"He said "hello" and "goodbye"."#).map(|m| m.as_str()).collect();
+    let matches: Vec<_> = re
+        .find_iter(r#"He said "hello" and "goodbye"."#)
+        .map(|m| m.as_str())
+        .collect();
     assert_eq!(matches, vec![r#""hello""#, r#""goodbye""#]);
 }
 
@@ -180,7 +199,10 @@ fn test_context_aware_apostrophe() {
     // Match word contractions (don't, can't, it's)
     let re = regex(r"\b\w+'\w+\b");
 
-    let matches: Vec<_> = re.find_iter("Don't can't won't it's").map(|m| m.as_str()).collect();
+    let matches: Vec<_> = re
+        .find_iter("Don't can't won't it's")
+        .map(|m| m.as_str())
+        .collect();
     assert!(matches.contains(&"Don't") || matches.contains(&"don't"));
     assert!(matches.contains(&"can't"));
 }
@@ -604,18 +626,18 @@ fn test_url_in_text() {
 fn test_newline_types() {
     let re = regex(r"\r?\n|\r");
 
-    assert!(re.is_match("\n"));    // Unix
-    assert!(re.is_match("\r\n"));  // Windows
-    assert!(re.is_match("\r"));    // Old Mac
+    assert!(re.is_match("\n")); // Unix
+    assert!(re.is_match("\r\n")); // Windows
+    assert!(re.is_match("\r")); // Old Mac
 }
 
 #[test]
 fn test_consecutive_duplicates() {
     let re = regex(r"(\w)\1+");
 
-    assert!(re.is_match("hello"));  // 'll'
-    assert!(re.is_match("book"));   // 'oo'
-    assert!(re.is_match("aaa"));    // 'aa' or 'aaa'
+    assert!(re.is_match("hello")); // 'll'
+    assert!(re.is_match("book")); // 'oo'
+    assert!(re.is_match("aaa")); // 'aa' or 'aaa'
 }
 
 #[test]
@@ -661,7 +683,10 @@ fn test_cl100k_whitespace_tokenization() {
     assert_eq!(tokens.len(), 3, "Should have 3 tokens");
     assert_eq!(tokens[0], "hello", "First token should be 'hello'");
     assert_eq!(tokens[1], "  ", "Second token should be 2 spaces (not 3)");
-    assert_eq!(tokens[2], " world", "Third token should be ' world' (space + word)");
+    assert_eq!(
+        tokens[2], " world",
+        "Third token should be ' world' (space + word)"
+    );
 }
 
 /// Test whitespace-heavy text tokenization matches expected behavior.
@@ -676,14 +701,14 @@ fn test_cl100k_mixed_whitespace() {
     // "hello", "  ", " world", "\t", "\ttest", "\n\n\n", "more", "  ", " text"
     assert_eq!(tokens.len(), 9, "Should have 9 tokens");
     assert_eq!(tokens[0], "hello");
-    assert_eq!(tokens[1], "  ");       // 2 spaces
-    assert_eq!(tokens[2], " world");   // space + word
-    assert_eq!(tokens[3], "\t");       // 1 tab
-    assert_eq!(tokens[4], "\ttest");   // tab + word
-    assert_eq!(tokens[5], "\n\n\n");   // 3 newlines
+    assert_eq!(tokens[1], "  "); // 2 spaces
+    assert_eq!(tokens[2], " world"); // space + word
+    assert_eq!(tokens[3], "\t"); // 1 tab
+    assert_eq!(tokens[4], "\ttest"); // tab + word
+    assert_eq!(tokens[5], "\n\n\n"); // 3 newlines
     assert_eq!(tokens[6], "more");
-    assert_eq!(tokens[7], "  ");       // 2 spaces
-    assert_eq!(tokens[8], " text");    // space + word
+    assert_eq!(tokens[7], "  "); // 2 spaces
+    assert_eq!(tokens[8], " text"); // space + word
 }
 
 /// Test the isolated negative lookahead pattern for whitespace.

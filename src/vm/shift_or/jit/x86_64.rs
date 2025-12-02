@@ -11,15 +11,13 @@ pub(super) struct ShiftOrJitCompiler;
 impl ShiftOrJitCompiler {
     /// Compiles a ShiftOr matcher to native code.
     pub(super) fn compile(shift_or: &ShiftOr) -> Option<JitShiftOr> {
-        let mut ops = dynasmrt::x64::Assembler::new().ok()?;
-
-        // Copy masks to heap (needs stable address for JIT code)
+        // Copy masks to heap FIRST (needs stable address for embedded pointer)
         let mut masks = Box::new([0u64; 256]);
         for (i, m) in shift_or.masks.iter().enumerate() {
             masks[i] = *m;
         }
 
-        // Copy follow sets to heap (needs stable address for JIT code)
+        // Copy follow sets to heap FIRST (needs stable address for embedded pointer)
         let mut follow = Box::new([0u64; 64]);
         for (i, f) in shift_or.follow.iter().enumerate() {
             if i < 64 {
@@ -27,7 +25,13 @@ impl ShiftOrJitCompiler {
             }
         }
 
-        let find_offset = Self::emit_find(&mut ops, shift_or);
+        // Get stable pointers to embed in JIT code
+        let masks_ptr = masks.as_ptr() as u64;
+        let follow_ptr = follow.as_ptr() as u64;
+
+        let mut ops = dynasmrt::x64::Assembler::new().ok()?;
+        let find_offset =
+            Self::emit_find(&mut ops, shift_or, masks_ptr, follow_ptr);
 
         let code = ops.finalize().ok()?;
 
@@ -45,26 +49,32 @@ impl ShiftOrJitCompiler {
         ))
     }
 
-    fn emit_find(ops: &mut dynasmrt::x64::Assembler, shift_or: &ShiftOr) -> dynasmrt::AssemblyOffset {
-        // Function signature: fn(input: *const u8, len: usize, masks: *const u64, follow: *const u64, accept: u64, first: u64) -> i64
+    fn emit_find(
+        ops: &mut dynasmrt::x64::Assembler,
+        shift_or: &ShiftOr,
+        masks_ptr: u64,
+        follow_ptr: u64,
+    ) -> dynasmrt::AssemblyOffset {
+        // OPTIMIZED Function signature: fn(input: *const u8, len: usize, accept: u64, first: u64) -> i64
         // Returns: packed (start << 32 | end) on match, or -1 if no match
+        //
+        // Masks and follow pointers are EMBEDDED in the JIT code (movabs instructions)
+        // This saves 2 parameter slots and 2 register moves in prologue.
         //
         // Register allocation (System V AMD64 ABI):
         //   rdi = input pointer
         //   rsi = input length
-        //   rdx = masks pointer
-        //   rcx = follow pointer
-        //   r8  = accept mask
-        //   r9  = first mask
+        //   rdx = accept mask
+        //   rcx = first mask
         //
-        // OPTIMIZED Working registers (keep hot values in registers, not stack):
+        // Working registers:
         //   r10 = current start position being tried
         //   r11 = state (inverted: 0 = active position)
-        //   r12 = follow pointer (kept in register for fast inner loop)
+        //   r12 = follow pointer (embedded, kept in register for fast inner loop)
         //   r13 = accept mask (kept in register - checked every iteration)
         //   r14 = saved input pointer
         //   r15 = saved len
-        //   rbx = saved masks pointer
+        //   rbx = masks pointer (embedded)
         //   [rsp+0] = first mask (only used at start of each position)
         //   [rsp+8] = last_match_start
         //   [rsp+16] = last_match_end
@@ -82,13 +92,13 @@ impl ShiftOrJitCompiler {
             ; push r15
             ; sub rsp, 24           // Allocate stack space for saved values
 
-            // Save arguments we'll need later - OPTIMIZED register allocation
+            // Save arguments and load embedded pointers
             ; mov r14, rdi           // r14 = input
             ; mov r15, rsi           // r15 = len
-            ; mov rbx, rdx           // rbx = masks
-            ; mov r12, rcx           // r12 = follow (HOT - keep in register!)
-            ; mov r13, r8            // r13 = accept (HOT - keep in register!)
-            ; mov [rsp], r9          // [rsp] = first (only used at start)
+            ; mov rbx, QWORD masks_ptr as i64  // rbx = masks (EMBEDDED!)
+            ; mov r12, QWORD follow_ptr as i64 // r12 = follow (EMBEDDED!)
+            ; mov r13, rdx           // r13 = accept (was r8, now rdx)
+            ; mov [rsp], rcx         // [rsp] = first (was r9, now rcx)
 
             // Initialize - match state on stack (less frequently accessed)
             ; xor r10d, r10d         // r10 = start position = 0

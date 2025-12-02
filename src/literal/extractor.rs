@@ -3,7 +3,7 @@
 //! Extracts literal prefixes and suffixes from HIR patterns for prefiltering.
 //! Supports both single-literal and multi-literal extraction for Teddy.
 
-use crate::hir::{HirExpr, Hir};
+use crate::hir::{Hir, HirExpr};
 
 /// Extracted literals from a pattern.
 #[derive(Debug, Clone, Default)]
@@ -79,9 +79,11 @@ fn starts_with_digit_class(expr: &HirExpr) -> bool {
         HirExpr::Class(class) => {
             // Only return true if ALL ranges are within the digit range 0-9.
             // This ensures we don't match \w which includes [A-Za-z0-9_].
-            !class.ranges.is_empty() && class.ranges.iter().all(|(lo, hi)| {
-                *lo >= b'0' && *hi <= b'9'
-            })
+            !class.ranges.is_empty()
+                && class
+                    .ranges
+                    .iter()
+                    .all(|(lo, hi)| *lo >= b'0' && *hi <= b'9')
         }
         HirExpr::Concat(exprs) => {
             // Skip anchors and find first non-anchor
@@ -101,9 +103,7 @@ fn starts_with_digit_class(expr: &HirExpr) -> bool {
                 false
             }
         }
-        HirExpr::Capture(cap) => {
-            starts_with_digit_class(&cap.expr)
-        }
+        HirExpr::Capture(cap) => starts_with_digit_class(&cap.expr),
         _ => false,
     }
 }
@@ -130,8 +130,8 @@ struct LiteralExtractor {
 impl LiteralExtractor {
     fn new() -> Self {
         Self {
-            max_prefixes: 8,  // Teddy limit
-            max_prefix_len: 8,  // Teddy limit
+            max_prefixes: 8,   // Teddy limit
+            max_prefix_len: 8, // Teddy limit
         }
     }
 
@@ -220,7 +220,9 @@ impl LiteralExtractor {
                 // (Anchors are zero-width and don't affect completeness)
                 if let Some(last) = exprs.last() {
                     // Skip trailing anchors to find the actual last element
-                    let actual_last = exprs.iter().rev()
+                    let actual_last = exprs
+                        .iter()
+                        .rev()
                         .find(|e| !matches!(e, HirExpr::Anchor(_)))
                         .unwrap_or(last);
 
@@ -296,9 +298,7 @@ impl LiteralExtractor {
                     }
                 }
             }
-            HirExpr::Capture(cap) => {
-                self.extract(&cap.expr)
-            }
+            HirExpr::Capture(cap) => self.extract(&cap.expr),
             HirExpr::Class(_) => {
                 // Can't extract literals from character classes
                 ExtractionResult::default()
@@ -323,7 +323,7 @@ impl LiteralExtractor {
             if !common.is_empty() {
                 return ExtractionResult {
                     prefixes: vec![common],
-                    complete: false,  // Common prefix isn't complete
+                    complete: false, // Common prefix isn't complete
                     has_nullable_suffix: false,
                 };
             }

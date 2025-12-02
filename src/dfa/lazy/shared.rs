@@ -309,7 +309,12 @@ pub fn nfa_anchor_info(nfa: &Nfa) -> (bool, bool, bool, bool) {
     }
 
     let has_anchors = has_start_anchor || has_end_anchor;
-    (has_anchors, has_start_anchor, has_end_anchor, has_multiline_anchors)
+    (
+        has_anchors,
+        has_start_anchor,
+        has_end_anchor,
+        has_multiline_anchors,
+    )
 }
 
 /// Computes epsilon closure with optional boundary filtering and position context.
@@ -333,48 +338,36 @@ pub fn epsilon_closure_with_context(
         };
 
         match &state.instruction {
-            Some(NfaInstruction::WordBoundary) => {
-                match is_at_boundary {
-                    Some(true) => {}
-                    Some(false) => continue,
-                    None => continue,
-                }
-            }
-            Some(NfaInstruction::NotWordBoundary) => {
-                match is_at_boundary {
-                    Some(false) => {}
-                    Some(true) => continue,
-                    None => continue,
-                }
-            }
-            Some(NfaInstruction::StartOfText) => {
-                match pos_ctx {
-                    Some(ctx) if ctx.at_start_of_input => {}
-                    Some(_) => continue,
-                    None => continue,
-                }
-            }
-            Some(NfaInstruction::EndOfText) => {
-                match pos_ctx {
-                    Some(ctx) if ctx.at_end_of_input => {}
-                    Some(_) => continue,
-                    None => continue,
-                }
-            }
-            Some(NfaInstruction::StartOfLine) => {
-                match pos_ctx {
-                    Some(ctx) if ctx.at_start_of_line => {}
-                    Some(_) => continue,
-                    None => continue,
-                }
-            }
-            Some(NfaInstruction::EndOfLine) => {
-                match pos_ctx {
-                    Some(ctx) if ctx.at_end_of_line => {}
-                    Some(_) => continue,
-                    None => continue,
-                }
-            }
+            Some(NfaInstruction::WordBoundary) => match is_at_boundary {
+                Some(true) => {}
+                Some(false) => continue,
+                None => continue,
+            },
+            Some(NfaInstruction::NotWordBoundary) => match is_at_boundary {
+                Some(false) => {}
+                Some(true) => continue,
+                None => continue,
+            },
+            Some(NfaInstruction::StartOfText) => match pos_ctx {
+                Some(ctx) if ctx.at_start_of_input => {}
+                Some(_) => continue,
+                None => continue,
+            },
+            Some(NfaInstruction::EndOfText) => match pos_ctx {
+                Some(ctx) if ctx.at_end_of_input => {}
+                Some(_) => continue,
+                None => continue,
+            },
+            Some(NfaInstruction::StartOfLine) => match pos_ctx {
+                Some(ctx) if ctx.at_start_of_line => {}
+                Some(_) => continue,
+                None => continue,
+            },
+            Some(NfaInstruction::EndOfLine) => match pos_ctx {
+                Some(ctx) if ctx.at_end_of_line => {}
+                Some(_) => continue,
+                None => continue,
+            },
             _ => {}
         }
 
@@ -413,15 +406,17 @@ pub fn get_or_create_state_with_class(
     }
 
     // Check if this is a match state
-    let is_match = nfa_states.iter().any(|&s| {
-        ctx.nfa.get(s).map(|state| state.is_match).unwrap_or(false)
-    });
+    let is_match = nfa_states
+        .iter()
+        .any(|&s| ctx.nfa.get(s).map(|state| state.is_match).unwrap_or(false));
 
     let state_index = ctx.states.len();
     let premul_id = (state_index as u32) * STRIDE;
 
-    ctx.states.push(DfaState::new(nfa_states, is_match, prev_class));
-    ctx.transitions.resize(ctx.transitions.len() + STRIDE as usize, UNKNOWN_STATE);
+    ctx.states
+        .push(DfaState::new(nfa_states, is_match, prev_class));
+    ctx.transitions
+        .resize(ctx.transitions.len() + STRIDE as usize, UNKNOWN_STATE);
     ctx.state_map.insert(key, premul_id);
 
     premul_id
@@ -445,7 +440,11 @@ pub fn flush_cache(ctx: &mut LazyDfaContext) {
     } else {
         StateKey::Simple(start_nfa_states.clone())
     };
-    ctx.states.push(DfaState::new(start_nfa_states, start_is_match, start_prev_class));
+    ctx.states.push(DfaState::new(
+        start_nfa_states,
+        start_is_match,
+        start_prev_class,
+    ));
     ctx.transitions.resize(STRIDE as usize, UNKNOWN_STATE);
     ctx.state_map.insert(key, 0);
     ctx.start = 0;

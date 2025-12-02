@@ -118,25 +118,23 @@ impl JitShiftOr {
 
     #[inline(always)]
     fn call_find(&self, input: &[u8]) -> i64 {
-        // Function signature: fn(input, len, masks, follow, accept, first) -> i64
-        let func: extern "C" fn(*const u8, usize, *const u64, *const u64, u64, u64) -> i64 =
+        // OPTIMIZED: Only 4 parameters (masks/follow are embedded in JIT code)
+        // Function signature: fn(input, len, accept, first) -> i64
+        let func: extern "C" fn(*const u8, usize, u64, u64) -> i64 =
             unsafe { std::mem::transmute(self.code.ptr(self.find_offset)) };
 
-        func(
-            input.as_ptr(),
-            input.len(),
-            self.masks.as_ptr(),
-            self.follow.as_ptr(),
-            self.accept,
-            self.first,
-        )
+        func(input.as_ptr(), input.len(), self.accept, self.first)
     }
 
     /// Find with word boundary handling (fallback to Rust).
     fn find_with_word_boundaries(&self, input: &[u8]) -> Option<(usize, usize)> {
         // Use similar logic to ShiftOr::find but with JIT for inner matching
         for start in 0..input.len() {
-            let prev_is_word = if start > 0 { is_word_byte(input[start - 1]) } else { false };
+            let prev_is_word = if start > 0 {
+                is_word_byte(input[start - 1])
+            } else {
+                false
+            };
             let curr_is_word = is_word_byte(input[start]);
 
             // Check leading word boundary
@@ -150,8 +148,16 @@ impl JitShiftOr {
 
                 // Check trailing word boundary
                 if self.has_trailing_wb {
-                    let last_is_word = if abs_end > 0 { is_word_byte(input[abs_end - 1]) } else { false };
-                    let next_is_word = if abs_end < input.len() { is_word_byte(input[abs_end]) } else { false };
+                    let last_is_word = if abs_end > 0 {
+                        is_word_byte(input[abs_end - 1])
+                    } else {
+                        false
+                    };
+                    let next_is_word = if abs_end < input.len() {
+                        is_word_byte(input[abs_end])
+                    } else {
+                        false
+                    };
                     if last_is_word == next_is_word {
                         continue;
                     }
@@ -227,12 +233,7 @@ impl JitShiftOr {
 
         // Check if the pattern matches at exactly position 0 of the slice
         let slice = &input[pos..];
-        self.find(slice).and_then(|(s, e)| {
-            if s == 0 {
-                Some((pos, pos + e))
-            } else {
-                None
-            }
-        })
+        self.find(slice)
+            .and_then(|(s, e)| if s == 0 { Some((pos, pos + e)) } else { None })
     }
 }

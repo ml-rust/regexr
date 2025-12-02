@@ -19,17 +19,17 @@
 //! this implementation uses explicit follow sets from Glushkov construction
 //! to handle patterns with nullable subexpressions.
 
-mod shared;
 mod engine;
 pub mod interpreter;
+mod shared;
 
 #[cfg(all(feature = "jit", target_arch = "x86_64"))]
 pub mod jit;
 
 // Re-exports
-pub use shared::{is_shift_or_compatible, is_shift_or_wide_compatible, ShiftOr, ShiftOrWide};
-pub use interpreter::ShiftOrInterpreter;
 pub use engine::ShiftOrEngine;
+pub use interpreter::ShiftOrInterpreter;
+pub use shared::{is_shift_or_compatible, is_shift_or_wide_compatible, ShiftOr, ShiftOrWide};
 
 #[cfg(all(feature = "jit", target_arch = "x86_64"))]
 pub use jit::JitShiftOr;
@@ -145,7 +145,10 @@ mod tests {
         let engine = make_engine("hello.*world").unwrap();
         assert!(engine.is_match(b"helloworld"), "helloworld should match");
         assert!(engine.is_match(b"hello world"), "hello world should match");
-        assert!(engine.is_match(b"hello to the world"), "hello to the world should match");
+        assert!(
+            engine.is_match(b"hello to the world"),
+            "hello to the world should match"
+        );
         assert!(!engine.is_match(b"hello"), "hello should not match");
         assert!(!engine.is_match(b"world"), "world should not match");
     }

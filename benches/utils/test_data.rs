@@ -230,9 +230,9 @@ fn generate_html_data(target_size: usize) -> String {
 
 fn generate_text_data(target_size: usize) -> String {
     let words = vec![
-        "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog",
-        "and", "then", "runs", "through", "forest", "near", "river",
-        "where", "birds", "sing", "their", "morning", "songs",
+        "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "and", "then", "runs",
+        "through", "forest", "near", "river", "where", "birds", "sing", "their", "morning",
+        "songs",
     ];
 
     let mut result = String::with_capacity(target_size);
@@ -269,15 +269,15 @@ fn generate_code_data(target_size: usize) -> String {
 /// Generate multilingual text for Unicode testing
 pub fn generate_unicode_data(target_size: usize) -> String {
     let texts = vec![
-        "Hello world",                          // English
-        "Bonjour le monde",                     // French
-        "Hola mundo",                           // Spanish
-        "Привет мир",                           // Russian
-        "こんにちは世界",                        // Japanese
-        "你好世界",                             // Chinese
-        "مرحبا بالعالم",                       // Arabic
-        "שלום עולם",                            // Hebrew
-        "Γειά σου κόσμε",                       // Greek
+        "Hello world",      // English
+        "Bonjour le monde", // French
+        "Hola mundo",       // Spanish
+        "Привет мир",       // Russian
+        "こんにちは世界",   // Japanese
+        "你好世界",         // Chinese
+        "مرحبا بالعالم",    // Arabic
+        "שלום עולם",        // Hebrew
+        "Γειά σου κόσμε",   // Greek
     ];
 
     let mut result = String::with_capacity(target_size);
