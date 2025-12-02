@@ -9,13 +9,19 @@ use dynasmrt::ExecutableBuffer;
 
 use super::x86_64::BacktrackingCompiler;
 
+// Platform-specific function pointer type
+#[cfg(target_os = "windows")]
+type MatchFn = unsafe extern "win64" fn(*const u8, usize, *mut i64) -> i64;
+#[cfg(not(target_os = "windows"))]
+type MatchFn = unsafe extern "sysv64" fn(*const u8, usize, *mut i64) -> i64;
+
 /// A compiled backtracking regex.
 pub struct BacktrackingJit {
     /// Executable code buffer (kept alive for the function pointer).
     #[allow(dead_code)]
     pub(super) code: ExecutableBuffer,
     /// Entry point for matching.
-    pub(super) match_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut i64) -> i64,
+    pub(super) match_fn: MatchFn,
     /// Number of capture groups.
     pub(super) capture_count: u32,
 }

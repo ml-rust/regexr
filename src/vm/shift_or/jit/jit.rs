@@ -173,7 +173,12 @@ impl JitShiftOr {
     fn call_find(&self, input: &[u8]) -> i64 {
         // OPTIMIZED: Only 4 parameters (masks/follow are embedded in JIT code)
         // Function signature: fn(input, len, accept, first) -> i64
-        let func: extern "C" fn(*const u8, usize, u64, u64) -> i64 =
+        #[cfg(target_os = "windows")]
+        let func: extern "win64" fn(*const u8, usize, u64, u64) -> i64 =
+            unsafe { std::mem::transmute(self.code.ptr(self.find_offset)) };
+
+        #[cfg(not(target_os = "windows"))]
+        let func: extern "sysv64" fn(*const u8, usize, u64, u64) -> i64 =
             unsafe { std::mem::transmute(self.code.ptr(self.find_offset)) };
 
         func(input.as_ptr(), input.len(), self.accept, self.first)

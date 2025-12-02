@@ -18,17 +18,29 @@ use dynasmrt::ExecutableBuffer;
 /// Sentinel value returned by JIT code to indicate interpreter fallback.
 pub const JIT_USE_INTERPRETER: i64 = -2;
 
+// Platform-specific function pointer types for JIT code
+#[cfg(target_os = "windows")]
+type FindFn = unsafe extern "win64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64;
+#[cfg(target_os = "windows")]
+type CapturesFn =
+    unsafe extern "win64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64;
+
+#[cfg(not(target_os = "windows"))]
+type FindFn = unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64;
+#[cfg(not(target_os = "windows"))]
+type CapturesFn =
+    unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64;
+
 /// A JIT-compiled Tagged NFA for single-pass capture extraction.
 pub struct TaggedNfaJit {
     /// Executable buffer containing the JIT code.
     #[allow(dead_code)]
     code: ExecutableBuffer,
     /// Entry point for `find` (returns end position or -1, or -2 for interpreter fallback).
-    find_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64,
+    find_fn: FindFn,
     /// Entry point for `captures` (writes to captures_out buffer, returns match end or -1/-2).
     /// Arguments: input_ptr, input_len, ctx, captures_out
-    captures_fn:
-        unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64,
+    captures_fn: CapturesFn,
     /// Liveness analysis for sparse copying.
     liveness: NfaLiveness,
     /// The NFA (kept for reference, PikeVm is used for fallback).
@@ -73,13 +85,8 @@ impl TaggedNfaJit {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         code: ExecutableBuffer,
-        find_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64,
-        captures_fn: unsafe extern "sysv64" fn(
-            *const u8,
-            usize,
-            *mut TaggedNfaContext,
-            *mut i64,
-        ) -> i64,
+        find_fn: FindFn,
+        captures_fn: CapturesFn,
         liveness: NfaLiveness,
         nfa: Nfa,
         capture_count: u32,

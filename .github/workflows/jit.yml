@@ -1,0 +1,116 @@
+name: JIT CI
+
+on:
+  push:
+    branches:
+      - '**/jit/**'
+      - 'jit/**'
+      - '**/jit'
+      - 'jit-*'
+      - '*-jit'
+      - '*-jit-*'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/jit/**'
+      - 'src/vm/*/jit/**'
+      - 'src/nfa/tagged/jit/**'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-jit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-jit-
+            ${{ runner.os }}-cargo-
+
+      - name: Check (no features)
+        run: cargo check --no-default-features
+
+      - name: Check (jit only)
+        run: cargo check --features jit
+
+      - name: Check (full)
+        run: cargo check --features full
+
+      - name: Test (no JIT)
+        run: cargo test --no-default-features
+
+      - name: Test (JIT only)
+        run: cargo test --features jit
+
+      - name: Test (full)
+        run: cargo test --features full
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-jit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-jit-
+            ${{ runner.os }}-cargo-
+
+      - name: Check (full)
+        run: cargo check --features full
+
+      - name: Test (full)
+        run: cargo test --features full
+
+  macos:
+    name: macOS (Intel)
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-jit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-jit-
+            ${{ runner.os }}-cargo-
+
+      - name: Check (full)
+        run: cargo check --features full
+
+      - name: Test (full)
+        run: cargo test --features full

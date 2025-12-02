@@ -117,6 +117,11 @@ impl BacktrackingCompiler {
             .finalize()
             .map_err(|e| Error::new(ErrorKind::Jit(format!("Failed to finalize: {:?}", e)), ""))?;
 
+        #[cfg(target_os = "windows")]
+        let match_fn: unsafe extern "win64" fn(*const u8, usize, *mut i64) -> i64 =
+            unsafe { std::mem::transmute(code.ptr(entry_offset)) };
+
+        #[cfg(not(target_os = "windows"))]
         let match_fn: unsafe extern "sysv64" fn(*const u8, usize, *mut i64) -> i64 =
             unsafe { std::mem::transmute(code.ptr(entry_offset)) };
 
@@ -130,7 +135,35 @@ impl BacktrackingCompiler {
     /// Emits the function prologue.
     fn emit_prologue(&mut self) {
         // Function signature: fn(input_ptr: *const u8, input_len: usize, captures: *mut i64) -> i64
-        // Arguments: rdi = input_ptr, rsi = input_len, rdx = captures_ptr
+        // Unix: rdi = input_ptr, rsi = input_len, rdx = captures_ptr
+        // Windows: rcx = input_ptr, rdx = input_len, r8 = captures_ptr
+
+        #[cfg(target_os = "windows")]
+        dynasm!(self.asm
+            ; push rdi              // Callee-saved on Windows
+            ; push rsi              // Callee-saved on Windows
+            ; push rbx
+            ; push r12
+            ; push r13
+            ; push r14
+            ; push r15
+            ; push rbp
+            ; mov rbp, rsp
+
+            // Allocate space for backtrack stack
+            ; sub rsp, 0x1008  // 4KB + 8 bytes for alignment
+
+            // Move Windows args to internal registers
+            ; mov rdi, rcx           // rdi = input_ptr
+            ; mov rsi, rdx           // rsi = input_len
+            ; mov r12, r8            // r12 = captures_ptr
+            ; xor r13d, r13d         // r13 = start_pos = 0
+            ; mov rbx, rsp           // rbx = backtrack stack pointer
+
+            ; mov rax, -1i32 as i64 as i32
+        );
+
+        #[cfg(not(target_os = "windows"))]
         dynasm!(self.asm
             ; push rbx
             ; push r12
@@ -923,6 +956,18 @@ impl BacktrackingCompiler {
             ; pop r13
             ; pop r12
             ; pop rbx
+        );
+
+        // Platform-specific epilogue
+        #[cfg(target_os = "windows")]
+        dynasm!(self.asm
+            ; pop rsi
+            ; pop rdi
+            ; ret
+        );
+
+        #[cfg(not(target_os = "windows"))]
+        dynasm!(self.asm
             ; ret
         );
     }

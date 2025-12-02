@@ -9,6 +9,7 @@
 //! - **W^X Compliant**: Generated code is never RWX (read-write-execute)
 //! - **Optimized**: 16-byte alignment for hot loops, efficient transition encoding
 //! - **Safe**: Memory-safe API wrapping unsafe JIT execution
+//! - **Cross-platform**: Supports both System V AMD64 (Unix) and Microsoft x64 (Windows) ABIs
 //!
 //! # Architecture Support
 //!
@@ -40,6 +41,9 @@
 //! # Ok(())
 //! # }
 //! ```
+
+#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+pub mod calling_convention;
 
 #[cfg(all(feature = "jit", target_arch = "x86_64"))]
 mod codegen;
@@ -118,7 +122,8 @@ pub fn compile_dfa(dfa: &mut LazyDfa) -> Result<CompiledRegex> {
 
 /// Returns true if JIT compilation is available on this platform.
 ///
-/// JIT is only available on x86-64 with the `jit` feature enabled.
+/// JIT is available on x86-64 systems (Windows, Linux, macOS) with the `jit` feature enabled.
+/// Both System V AMD64 ABI (Unix) and Microsoft x64 ABI (Windows) are supported.
 ///
 /// # Example
 ///
