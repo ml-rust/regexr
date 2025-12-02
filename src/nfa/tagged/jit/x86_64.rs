@@ -39,9 +39,11 @@ pub(super) struct TaggedNfaJitCompiler {
     add_thread_label: dynasmrt::DynamicLabel,
     /// CodepointClasses collected during pattern extraction.
     /// Boxed to ensure stable addresses for JIT code references.
+    #[allow(clippy::vec_box)]
     codepoint_classes: Vec<Box<CodepointClass>>,
     /// Lookaround NFAs collected during pattern extraction.
     /// Boxed to ensure stable addresses for JIT helper function references.
+    #[allow(clippy::vec_box)]
     lookaround_nfas: Vec<Box<Nfa>>,
 }
 
@@ -176,21 +178,22 @@ impl TaggedNfaJitCompiler {
         self.finalize(find_offset, captures_offset, false, steps)
     }
 
-    /// Generates JIT code for simple linear patterns (literals).
-    ///
-    /// For a pattern like "abc", generates code that:
-    /// 1. Tries each starting position
-    /// 2. At each position, walks the linear NFA chain
-    /// 3. Returns on first match
-    ///
-    /// Register allocation (System V AMD64 ABI):
-    /// - rdi = input_ptr (argument, then scratch)
-    /// - rsi = input_len (argument)
-    /// - rbx = input_ptr (callee-saved)
-    /// - r12 = input_len (callee-saved)
-    /// - r13 = start_pos for current attempt (callee-saved)
-    /// - r14 = current_pos (absolute position in input) (callee-saved)
-    /// - rax = scratch / return value
+    // Generates JIT code for simple linear patterns (literals).
+    //
+    // For a pattern like "abc", generates code that:
+    // 1. Tries each starting position
+    // 2. At each position, walks the linear NFA chain
+    // 3. Returns on first match
+    //
+    // Register allocation (System V AMD64 ABI):
+    // - rdi = input_ptr (argument, then scratch)
+    // - rsi = input_len (argument)
+    // - rbx = input_ptr (callee-saved)
+    // - r12 = input_len (callee-saved)
+    // - r13 = start_pos for current attempt (callee-saved)
+    // - r14 = current_pos (absolute position in input) (callee-saved)
+    // - rax = scratch / return value
+
     /// Check if pattern contains backreferences (recursively in alternations).
     fn has_backref(steps: &[PatternStep]) -> bool {
         steps.iter().any(|s| match s {
@@ -252,7 +255,7 @@ impl TaggedNfaJitCompiler {
                 // Consumes input if any alternative consumes input
                 alternatives
                     .iter()
-                    .any(|alt| alt.iter().any(|s| Self::step_consumes_input(s)))
+                    .any(|alt| alt.iter().any(Self::step_consumes_input))
             }
 
             // Zero-width assertions don't consume input
@@ -402,7 +405,7 @@ impl TaggedNfaJitCompiler {
                 PatternStep::GreedyPlus(byte_class) => {
                     // Check if there are remaining steps that consume input
                     let remaining = &steps[step_idx + 1..];
-                    let needs_backtrack = remaining.iter().any(|s| Self::step_consumes_input(s));
+                    let needs_backtrack = remaining.iter().any(Self::step_consumes_input);
 
                     if needs_backtrack {
                         // Backtracking version: greedily match, then try remaining, backtrack on failure
@@ -445,7 +448,7 @@ impl TaggedNfaJitCompiler {
                 PatternStep::GreedyStar(byte_class) => {
                     // Check if there are remaining steps that consume input
                     let remaining = &steps[step_idx + 1..];
-                    let needs_backtrack = remaining.iter().any(|s| Self::step_consumes_input(s));
+                    let needs_backtrack = remaining.iter().any(Self::step_consumes_input);
 
                     if needs_backtrack {
                         // Backtracking version
@@ -578,7 +581,7 @@ impl TaggedNfaJitCompiler {
                 PatternStep::GreedyCodepointPlus(cpclass) => {
                     // Check if there are remaining steps that consume input
                     let remaining = &steps[step_idx + 1..];
-                    let needs_backtrack = remaining.iter().any(|s| Self::step_consumes_input(s));
+                    let needs_backtrack = remaining.iter().any(Self::step_consumes_input);
 
                     if needs_backtrack {
                         // Backtracking version: greedily match UTF-8, then try remaining, backtrack on failure
@@ -1075,13 +1078,8 @@ impl TaggedNfaJitCompiler {
             let is_last = alt_idx == alternatives.len() - 1;
 
             // Create label for trying next alternative (or cleanup for last)
-            let try_next_alt = if is_last {
-                // Last alternative - if it fails, we need to clean up and fail
-                let cleanup_label = self.asm.new_dynamic_label();
-                cleanup_label
-            } else {
-                self.asm.new_dynamic_label()
-            };
+            // Last alternative - if it fails, we need to clean up and fail
+            let try_next_alt = self.asm.new_dynamic_label();
 
             // Emit code for each step in this alternative
             for alt_step in alt_steps.iter() {
@@ -4643,8 +4641,6 @@ impl TaggedNfaJitCompiler {
         visited: &mut [bool],
         end_state: Option<StateId>,
     ) -> Vec<PatternStep> {
-        use crate::nfa::NfaInstruction;
-
         let mut steps = Vec::new();
         let mut current = start;
 
@@ -4786,8 +4782,7 @@ impl TaggedNfaJitCompiler {
                 }
 
                 // Extract the ranges for this step
-                let ranges: Vec<ByteRange> =
-                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| *r).collect();
 
                 // Check if target state forms a loop (greedy or non-greedy)
                 let target_state = &self.nfa.states[target as usize];
@@ -4882,11 +4877,8 @@ impl TaggedNfaJitCompiler {
                                 pattern_state.transitions.iter().all(|(_, t)| *t == target);
 
                             if all_same_target {
-                                let ranges: Vec<ByteRange> = pattern_state
-                                    .transitions
-                                    .iter()
-                                    .map(|(r, _)| r.clone())
-                                    .collect();
+                                let ranges: Vec<ByteRange> =
+                                    pattern_state.transitions.iter().map(|(r, _)| *r).collect();
 
                                 // Find the exit state (after the NonGreedyExit marker)
                                 let exit_state = eps0_state.epsilon[0];
@@ -4992,8 +4984,7 @@ impl TaggedNfaJitCompiler {
                     return Vec::new(); // Different targets
                 }
 
-                let ranges: Vec<ByteRange> =
-                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| *r).collect();
 
                 // Check for greedy plus pattern: current -[byte]-> target -[eps]-> current (loop back)
                 //                                              |-> next (exit)
@@ -5112,11 +5103,7 @@ impl TaggedNfaJitCompiler {
             return None;
         }
 
-        let ranges: Vec<ByteRange> = loop_state
-            .transitions
-            .iter()
-            .map(|(r, _)| r.clone())
-            .collect();
+        let ranges: Vec<ByteRange> = loop_state.transitions.iter().map(|(r, _)| *r).collect();
 
         // The target should have epsilon back to branch_state (completing the loop)
         let target_state = &inner_nfa.states[target as usize];
@@ -5202,8 +5189,6 @@ impl TaggedNfaJitCompiler {
         alt_start: StateId,
         depth: usize,
     ) -> Option<StateId> {
-        use crate::nfa::NfaInstruction;
-
         // Limit recursion depth to prevent stack overflow
         if depth > 20 {
             return None;
@@ -5329,8 +5314,7 @@ impl TaggedNfaJitCompiler {
                     return None;
                 }
 
-                let ranges: Vec<ByteRange> =
-                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| *r).collect();
 
                 return if ranges.len() == 1 && ranges[0].start == ranges[0].end {
                     Some(PatternStep::Byte(ranges[0].start))

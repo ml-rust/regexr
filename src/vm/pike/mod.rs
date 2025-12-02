@@ -24,7 +24,7 @@
 //!
 //! - Sparse set deduplication: O(1) state deduplication using generation counters
 //! - BinaryHeap scheduling: Efficient backref handling with min-heap
-//! - Arc<Nfa> for lookarounds: Avoids expensive NFA cloning
+//! - `Arc<Nfa>` for lookarounds: Avoids expensive NFA cloning
 
 mod engine;
 pub mod interpreter;

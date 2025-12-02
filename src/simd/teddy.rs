@@ -211,13 +211,11 @@ impl Teddy {
 
                     // Verify each matching pattern
                     for (pat_idx, pattern) in self.patterns.iter().enumerate() {
-                        if (pattern_mask & (1 << pat_idx)) != 0 {
-                            // First byte matches, verify the rest
-                            if pos + pattern.len() <= len {
-                                if haystack[pos..pos + pattern.len()] == *pattern {
-                                    return Some((pat_idx, pos));
-                                }
-                            }
+                        if (pattern_mask & (1 << pat_idx)) != 0
+                            && pos + pattern.len() <= len
+                            && haystack[pos..pos + pattern.len()] == *pattern
+                        {
+                            return Some((pat_idx, pos));
                         }
                     }
                 }
@@ -271,10 +269,10 @@ impl Teddy {
                         continue;
                     }
 
-                    if i + pattern.len() <= haystack.len() {
-                        if &haystack[i..i + pattern.len()] == pattern.as_slice() {
-                            return Some((pat_idx, pos));
-                        }
+                    if i + pattern.len() <= haystack.len()
+                        && &haystack[i..i + pattern.len()] == pattern.as_slice()
+                    {
+                        return Some((pat_idx, pos));
                     }
                 }
             }

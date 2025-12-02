@@ -23,6 +23,7 @@
 //! - `helpers.rs` - JIT context and extern helper functions
 
 mod helpers;
+#[allow(clippy::module_inception)]
 mod jit;
 
 #[cfg(target_arch = "x86_64")]

@@ -71,7 +71,7 @@ pub struct CodepointClass {
     /// Whether this class is negated.
     pub negated: bool,
     /// Precomputed ASCII bitmap for fast lookup of codepoints 0-127.
-    /// ascii_bitmap[0] covers bits 0-63, ascii_bitmap[1] covers bits 64-127.
+    /// `ascii_bitmap[0]` covers bits 0-63, `ascii_bitmap[1]` covers bits 64-127.
     /// A set bit means the codepoint is IN the class (before negation is applied).
     pub ascii_bitmap: [u64; 2],
 }

@@ -336,6 +336,7 @@ fn emit_dispatch(
 ///
 /// The ranges are the byte ranges that self-loop, and other_targets are
 /// non-self-loop transitions that need to be checked after the fast-forward.
+#[allow(clippy::type_complexity)]
 fn analyze_self_loop(
     state: &MaterializedState,
 ) -> Option<(Vec<(u8, u8)>, Vec<(u8, u8, DfaStateId)>)> {
@@ -1073,9 +1074,9 @@ mod tests {
     #[test]
     fn test_contiguous_range() {
         assert!(is_contiguous_range(&[1, 2, 3, 4]));
-        assert!(is_contiguous_range(&[b'a', b'b', b'c']));
+        assert!(is_contiguous_range(b"abc"));
         assert!(!is_contiguous_range(&[1, 2, 4, 5]));
-        assert!(!is_contiguous_range(&[b'a', b'c']));
+        assert!(!is_contiguous_range(b"ac"));
         assert!(is_contiguous_range(&[42]));
         assert!(is_contiguous_range(&[]));
     }
@@ -1083,6 +1084,6 @@ mod tests {
     #[test]
     fn test_unsorted_contiguous() {
         assert!(is_contiguous_range(&[3, 1, 2, 4]));
-        assert!(is_contiguous_range(&[b'c', b'a', b'b']));
+        assert!(is_contiguous_range(b"cab"));
     }
 }

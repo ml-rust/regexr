@@ -168,8 +168,7 @@ impl BacktrackingVm {
                     if pos < input.len() {
                         let b = input[pos];
                         let mut matched = false;
-                        for i in 0..count as usize {
-                            let (lo, hi) = ranges[i];
+                        for &(lo, hi) in ranges.iter().take(count as usize) {
                             if b >= lo && b <= hi {
                                 matched = true;
                                 break;
@@ -197,8 +196,7 @@ impl BacktrackingVm {
                     if pos < input.len() {
                         let b = input[pos];
                         let mut in_range = false;
-                        for i in 0..count as usize {
-                            let (lo, hi) = ranges[i];
+                        for &(lo, hi) in ranges.iter().take(count as usize) {
                             if b >= lo && b <= hi {
                                 in_range = true;
                                 break;
@@ -344,13 +342,10 @@ impl BacktrackingVm {
                         // Save old value for potential restore
                         if let Some(&frame_start) = slot_stack_frames.last() {
                             // Check if we already saved this slot in current frame
-                            let mut already_saved = false;
-                            for i in frame_start..slot_stack.len() {
-                                if slot_stack[i].0 == slot as u16 {
-                                    already_saved = true;
-                                    break;
-                                }
-                            }
+                            let already_saved = slot_stack
+                                .iter()
+                                .skip(frame_start)
+                                .any(|&(s, _)| s == slot as u16);
                             if !already_saved {
                                 slot_stack.push((slot as u16, slots[slot]));
                             }

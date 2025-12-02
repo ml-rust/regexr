@@ -203,7 +203,7 @@ impl CompiledRegex {
                     return Some((start, end));
                 }
                 for (i, &byte) in input.iter().enumerate() {
-                    if byte == b'\n' && i + 1 <= input.len() {
+                    if byte == b'\n' && i < input.len() {
                         if let Some((start, end)) = self.find_at(input, i + 1) {
                             return Some((start, end));
                         }

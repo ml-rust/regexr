@@ -54,13 +54,7 @@ unsafe fn memchr_avx2(needle: u8, haystack: &[u8]) -> Option<usize> {
     }
 
     // Handle remaining bytes (scalar)
-    for i in offset..len {
-        if *haystack.get_unchecked(i) == needle {
-            return Some(i);
-        }
-    }
-
-    None
+    (offset..len).find(|&i| *haystack.get_unchecked(i) == needle)
 }
 
 /// Scalar implementation of memchr.

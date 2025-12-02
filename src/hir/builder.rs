@@ -599,6 +599,7 @@ impl HirTranslator {
 
     /// Builds a trie-based HIR expression for UTF-8 sequences.
     /// This shares common prefixes to minimize NFA states.
+    #[allow(clippy::only_used_in_recursion)]
     fn build_utf8_trie(&self, sequences: &[Utf8Sequence]) -> HirExpr {
         if sequences.is_empty() {
             return HirExpr::Empty;

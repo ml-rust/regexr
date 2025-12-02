@@ -55,7 +55,7 @@ pub struct PikeVmContext {
     pub next_threads: Vec<Thread>,
     /// Threads waiting for future positions (for backrefs)
     pub future_threads: BinaryHeap<PendingThread>,
-    /// O(1) deduplication: visited[state_id] == generation means state already visited
+    /// O(1) deduplication: `visited[state_id] == generation` means state already visited
     pub visited: Vec<usize>,
     /// Current generation counter (incremented per position/step)
     pub generation: usize,

@@ -357,7 +357,7 @@ mod tests {
             let so = make_wide(&pattern).unwrap();
 
             // Match at the start
-            let input = format!("{}", "a".repeat(100));
+            let input = "a".repeat(100);
             assert_eq!(so.find(input.as_bytes()), Some((0, 100)));
 
             // Match after prefix

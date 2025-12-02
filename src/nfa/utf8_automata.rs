@@ -178,7 +178,7 @@ fn compile_3byte(start: u32, end: u32) -> Vec<Utf8Sequence> {
 
     while current <= end {
         // Skip surrogates
-        if current >= 0xD800 && current <= 0xDFFF {
+        if (0xD800..=0xDFFF).contains(&current) {
             current = 0xE000;
             if current > end {
                 break;
@@ -207,7 +207,7 @@ fn compile_3byte(start: u32, end: u32) -> Vec<Utf8Sequence> {
         current = range_end + 1;
 
         // Skip surrogates after the range
-        if current >= 0xD800 && current <= 0xDFFF {
+        if (0xD800..=0xDFFF).contains(&current) {
             current = 0xE000;
         }
     }
@@ -329,7 +329,7 @@ fn compile_4byte_with_fixed_byte12(
 ///
 /// Returns `None` for invalid code points (surrogates or out of range).
 pub fn encode_code_point(cp: u32) -> Option<Vec<u8>> {
-    if cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF) {
+    if cp > 0x10FFFF || (0xD800..=0xDFFF).contains(&cp) {
         return None;
     }
 
@@ -413,20 +413,20 @@ fn complement_code_point_ranges(ranges: &[(u32, u32)]) -> Vec<(u32, u32)> {
                 }
                 if start > 0xDFFF {
                     complement.push((0xE000.max(current), start.saturating_sub(1)));
-                } else if start >= 0xD800 && start <= 0xDFFF {
+                } else if (0xD800..=0xDFFF).contains(&start) {
                     // start is in surrogate range, skip to after
                     current = 0xE000;
                     if current < start {
                         complement.push((current, start.saturating_sub(1)));
                     }
                 }
-            } else if current >= 0xD800 && current <= 0xDFFF {
+            } else if (0xD800..=0xDFFF).contains(&current) {
                 // Current is in surrogate range, skip to after
                 current = 0xE000;
                 if current < start {
                     complement.push((current, start.saturating_sub(1)));
                 }
-            } else if start >= 0xD800 && start <= 0xDFFF {
+            } else if (0xD800..=0xDFFF).contains(&start) {
                 // Start is in surrogate range
                 if current < 0xD800 {
                     complement.push((current, 0xD7FF));
@@ -442,7 +442,7 @@ fn complement_code_point_ranges(ranges: &[(u32, u32)]) -> Vec<(u32, u32)> {
         current = end.saturating_add(1);
 
         // Skip surrogates if we land in them
-        if current >= 0xD800 && current <= 0xDFFF {
+        if (0xD800..=0xDFFF).contains(&current) {
             current = 0xE000;
         }
     }

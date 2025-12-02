@@ -78,7 +78,7 @@ pub fn get_test_data() -> &'static TestDataCache {
 }
 
 fn generate_email_data(target_size: usize) -> String {
-    let valid_emails = vec![
+    let valid_emails = [
         "john.doe@example.com",
         "jane_smith@company.org",
         "test+tag@subdomain.example.co.uk",
@@ -87,7 +87,7 @@ fn generate_email_data(target_size: usize) -> String {
         "admin@localhost.localdomain",
     ];
 
-    let invalid_emails = vec![
+    let invalid_emails = [
         "not-an-email",
         "@example.com",
         "missing@domain",
@@ -113,7 +113,7 @@ fn generate_email_data(target_size: usize) -> String {
 }
 
 fn generate_url_data(target_size: usize) -> String {
-    let urls = vec![
+    let urls = [
         "https://www.example.com/path/to/resource",
         "http://subdomain.test.org:8080/api/v1/users?id=123",
         "https://github.com/user/repo/blob/main/src/file.rs",
@@ -134,8 +134,8 @@ fn generate_url_data(target_size: usize) -> String {
 }
 
 fn generate_log_data(target_size: usize) -> String {
-    let levels = vec!["INFO", "WARNING", "ERROR", "CRITICAL", "DEBUG"];
-    let messages = vec![
+    let levels = ["INFO", "WARNING", "ERROR", "CRITICAL", "DEBUG"];
+    let messages = [
         "Request processed successfully",
         "Connection timeout after 30s",
         "Database query failed",
@@ -206,7 +206,7 @@ fn generate_ip_data(target_size: usize) -> String {
 }
 
 fn generate_html_data(target_size: usize) -> String {
-    let tags = vec![
+    let tags = [
         "<div class=\"container\">",
         "<p>Some paragraph text</p>",
         "<a href=\"/link\">Click here</a>",
@@ -229,7 +229,7 @@ fn generate_html_data(target_size: usize) -> String {
 }
 
 fn generate_text_data(target_size: usize) -> String {
-    let words = vec![
+    let words = [
         "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "and", "then", "runs",
         "through", "forest", "near", "river", "where", "birds", "sing", "their", "morning",
         "songs",
@@ -247,7 +247,7 @@ fn generate_text_data(target_size: usize) -> String {
 }
 
 fn generate_code_data(target_size: usize) -> String {
-    let code_snippets = vec![
+    let code_snippets = [
         r#"let x = "hello world";"#,
         r#"const y = 'single quoted string';"#,
         r#"var z = "escaped \"quotes\" inside";"#,

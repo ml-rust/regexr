@@ -6,7 +6,7 @@
 use std::time::Instant;
 
 fn generate_code_data(target_size: usize) -> String {
-    let code_snippets = vec![
+    let code_snippets = [
         r#"let x = "hello world";"#,
         r#"const y = 'single quoted string';"#,
         r#"var z = "escaped \"quotes\" inside";"#,

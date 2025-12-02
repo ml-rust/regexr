@@ -44,7 +44,7 @@ impl ThreadWorklist {
     /// * `state_count` - Number of NFA states (for visited bitmap sizing)
     pub fn new(capture_count: u32, state_count: usize) -> Self {
         let stride = (capture_count as usize + 1) * 2;
-        let bitmap_words = (state_count.max(1) + 63) / 64;
+        let bitmap_words = state_count.max(1).div_ceil(64);
 
         Self {
             count: 0,
@@ -157,7 +157,7 @@ pub struct LookaroundCache {
 impl LookaroundCache {
     /// Creates a new cache for the given number of lookarounds and input length.
     pub fn new(lookaround_count: usize, max_input_len: usize) -> Self {
-        let words_needed = (max_input_len + 63) / 64;
+        let words_needed = max_input_len.div_ceil(64);
         let total_words = lookaround_count * words_needed;
         Self {
             count: lookaround_count,
@@ -174,7 +174,7 @@ impl LookaroundCache {
         if lookaround_id >= self.count || pos >= self.max_len {
             return false;
         }
-        let words_per_la = (self.max_len + 63) / 64;
+        let words_per_la = self.max_len.div_ceil(64);
         let word_idx = lookaround_id * words_per_la + pos / 64;
         let bit = pos % 64;
         (self.computed[word_idx] & (1u64 << bit)) != 0
@@ -187,7 +187,7 @@ impl LookaroundCache {
         if lookaround_id >= self.count || pos >= self.max_len {
             return false;
         }
-        let words_per_la = (self.max_len + 63) / 64;
+        let words_per_la = self.max_len.div_ceil(64);
         let word_idx = lookaround_id * words_per_la + pos / 64;
         let bit = pos % 64;
         (self.results[word_idx] & (1u64 << bit)) != 0
@@ -200,7 +200,7 @@ impl LookaroundCache {
         if lookaround_id >= self.count || pos >= self.max_len {
             return;
         }
-        let words_per_la = (self.max_len + 63) / 64;
+        let words_per_la = self.max_len.div_ceil(64);
         let word_idx = lookaround_id * words_per_la + pos / 64;
         let bit = pos % 64;
         self.computed[word_idx] |= 1u64 << bit;

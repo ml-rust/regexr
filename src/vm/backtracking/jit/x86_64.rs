@@ -695,7 +695,7 @@ impl BacktrackingCompiler {
                 );
             }
 
-            if max.map_or(true, |m| m > min) {
+            if max.is_none_or(|m| m > min) {
                 // Can match more - set up choice points
                 let loop_start = self.asm.new_dynamic_label();
                 let try_more = self.asm.new_dynamic_label();
@@ -897,10 +897,10 @@ impl BacktrackingCompiler {
     /// Emits the backtrack handler.
     ///
     /// All backtrack entries are 32 bytes (stack grows UP):
-    /// - [entry + 0]:  position (rcx)
-    /// - [entry + 8]:  resume address
-    /// - [entry + 16]: start_pos (r13)
-    /// - [entry + 24]: extra data (count for repetition, unused for others)
+    /// - `entry + 0`:  position (rcx)
+    /// - `entry + 8`:  resume address
+    /// - `entry + 16`: start_pos (r13)
+    /// - `entry + 24`: extra data (count for repetition, unused for others)
     fn emit_backtrack_handler(&mut self) {
         dynasm!(self.asm
             ; =>self.backtrack_label

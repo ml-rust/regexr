@@ -58,6 +58,7 @@ impl std::fmt::Debug for CompiledRegex {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum CompiledInner {
     PikeVm(PikeVm),
     ShiftOr(ShiftOr),
@@ -212,11 +213,12 @@ impl CompiledRegex {
 
                 // Find the first word boundary in the lookback window
                 for i in (start_pos..inner_pos).rev() {
-                    if i == 0 || !is_word_byte(input[i - 1]) {
-                        if i < input.len() && is_word_byte(input[i]) {
-                            candidate = i;
-                            break;
-                        }
+                    if (i == 0 || !is_word_byte(input[i - 1]))
+                        && i < input.len()
+                        && is_word_byte(input[i])
+                    {
+                        candidate = i;
+                        break;
                     }
                 }
 
@@ -313,11 +315,9 @@ impl CompiledRegex {
                 // Use the optimized context-based method
                 vm.captures_from_start_with_context(&input[start..], ctx)
                     .map(|mut caps| {
-                        for slot in &mut caps {
-                            if let Some((s, e)) = slot {
-                                *s += start;
-                                *e += start;
-                            }
+                        for (s, e) in caps.iter_mut().flatten() {
+                            *s += start;
+                            *e += start;
                         }
                         caps
                     })
@@ -346,11 +346,9 @@ impl CompiledRegex {
                 vm.captures_from_start_with_context(&input[start..], ctx)
                     .map(|mut caps| {
                         // Adjust capture positions to absolute offsets
-                        for slot in &mut caps {
-                            if let Some((s, e)) = slot {
-                                *s += start;
-                                *e += start;
-                            }
+                        for (s, e) in caps.iter_mut().flatten() {
+                            *s += start;
+                            *e += start;
                         }
                         caps
                     })
@@ -372,11 +370,9 @@ impl CompiledRegex {
                 let ctx = ctx_ref.as_mut()?;
                 vm.captures_from_start_with_context(&input[start..], ctx)
                     .map(|mut caps| {
-                        for slot in &mut caps {
-                            if let Some((s, e)) = slot {
-                                *s += start;
-                                *e += start;
-                            }
+                        for (s, e) in caps.iter_mut().flatten() {
+                            *s += start;
+                            *e += start;
                         }
                         caps
                     })

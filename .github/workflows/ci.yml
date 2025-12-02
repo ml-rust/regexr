@@ -110,13 +110,13 @@ jobs:
         run: cargo test --features full
 
   msrv:
-    name: MSRV (1.70)
+    name: MSRV (1.83)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust 1.70
-        uses: dtolnay/rust-toolchain@1.70
+      - name: Install Rust 1.83
+        uses: dtolnay/rust-toolchain@1.83
 
       - name: Check MSRV
         run: cargo check --features full

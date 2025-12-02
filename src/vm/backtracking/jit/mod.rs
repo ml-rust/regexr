@@ -7,6 +7,7 @@
 //! - **x86_64**: Uses dynasm for code generation
 //! - **aarch64**: Uses dynasm for code generation
 
+#[allow(clippy::module_inception)]
 mod jit;
 
 #[cfg(target_arch = "x86_64")]

@@ -69,11 +69,11 @@ pub struct TaggedNfaJit {
     stride: usize,
     /// Stored CodepointClasses for JIT code to reference.
     /// These must outlive the JIT code since their pointers are embedded in the generated assembly.
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::vec_box)]
     codepoint_classes: Vec<Box<CodepointClass>>,
     /// Stored lookaround NFAs for JIT code to reference via helper functions.
     /// Index corresponds to the index stored in PatternStep::*Lookahead/*Lookbehind.
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::vec_box)]
     lookaround_nfas: Vec<Box<Nfa>>,
     /// Whether find_fn needs context (false for simple patterns).
     /// When false, we skip the expensive context setup in find().
@@ -95,7 +95,7 @@ pub struct TaggedNfaJit {
 
 impl TaggedNfaJit {
     /// Creates a new TaggedNfaJit from compiled components.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::vec_box)]
     pub(super) fn new(
         code: ExecutableBuffer,
         find_fn: FindFn,
@@ -162,6 +162,7 @@ impl TaggedNfaJit {
                 let ns = t0.elapsed().as_nanos() as u64;
                 TOTAL_NS.fetch_add(ns, std::sync::atomic::Ordering::Relaxed);
                 let count = CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                #[allow(clippy::manual_is_multiple_of)]
                 if count % 10000 == 0 {
                     let total = TOTAL_NS.load(std::sync::atomic::Ordering::Relaxed);
                     eprintln!(

@@ -6,8 +6,8 @@
 //!
 //! The analysis uses backward dataflow:
 //! - A capture is live at state S if it may be read on any path from S to a match
-//! - live_reads[S] = reads_at[S] ∪ (∪ live_reads[successors(S)])
-//! - copy_mask[S] = live_reads[S] ∩ writes_before[S]
+//! - `live_reads[S] = reads_at[S] ∪ (∪ live_reads[successors(S)])`
+//! - `copy_mask[S] = live_reads[S] ∩ writes_before[S]`
 
 use crate::nfa::{Nfa, NfaInstruction, StateId};
 use std::collections::VecDeque;

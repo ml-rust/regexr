@@ -220,8 +220,7 @@ impl<'a> StepExtractor<'a> {
                     return Vec::new();
                 }
 
-                let ranges: Vec<ByteRange> =
-                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| *r).collect();
 
                 // Check for greedy loop
                 let target_state = &self.nfa.states[target as usize];
@@ -273,7 +272,7 @@ impl<'a> StepExtractor<'a> {
 
                 // Extract each alternative branch
                 let mut alternatives: Vec<Vec<PatternStep>> = Vec::new();
-                for (_i, &target) in state.epsilon.iter().enumerate() {
+                for &target in state.epsilon.iter() {
                     let mut branch_visited = visited.to_vec();
                     branch_visited[current as usize] = true;
                     let branch_steps = self.extract_branch(target, &mut branch_visited);
@@ -423,8 +422,7 @@ impl<'a> StepExtractor<'a> {
                     return Vec::new();
                 }
 
-                let ranges: Vec<ByteRange> =
-                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| *r).collect();
 
                 // Check for greedy loop
                 let target_state = &self.nfa.states[target as usize];
@@ -517,7 +515,7 @@ impl<'a> StepExtractor<'a> {
                 // eprintln!("DEBUG extract_branch: actual alternation at state {} with 2 epsilons", current);
                 let mut alternatives: Vec<Vec<PatternStep>> = Vec::new();
                 let mut any_valid = false;
-                for (_i, &target) in state.epsilon.iter().enumerate() {
+                for &target in state.epsilon.iter() {
                     let mut branch_visited = visited.to_vec();
                     branch_visited[current as usize] = true;
                     // Check if this branch can reach the match state
@@ -549,7 +547,7 @@ impl<'a> StepExtractor<'a> {
                 // eprintln!("DEBUG extract_branch: multi-alternation at state {} with {} epsilons", current, state.epsilon.len());
                 let mut alternatives: Vec<Vec<PatternStep>> = Vec::new();
                 let mut any_valid = false;
-                for (_i, &target) in state.epsilon.iter().enumerate() {
+                for &target in state.epsilon.iter() {
                     let mut branch_visited = visited.to_vec();
                     branch_visited[current as usize] = true;
                     // Check if this branch directly reaches match state
@@ -648,8 +646,7 @@ impl<'a> StepExtractor<'a> {
                     return Vec::new();
                 }
 
-                let ranges: Vec<ByteRange> =
-                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| *r).collect();
 
                 // Check for greedy star/plus pattern: state has transitions to target,
                 // and target has epsilon transitions where one leads back to current state
@@ -800,8 +797,7 @@ impl<'a> StepExtractor<'a> {
                     return Vec::new();
                 }
 
-                let ranges: Vec<ByteRange> =
-                    state.transitions.iter().map(|(r, _)| r.clone()).collect();
+                let ranges: Vec<ByteRange> = state.transitions.iter().map(|(r, _)| *r).collect();
 
                 // Check for repetition patterns - we can't handle these in lookbehind
                 let target_state = &inner_nfa.states[target as usize];
@@ -956,11 +952,7 @@ impl<'a> StepExtractor<'a> {
             return None;
         }
 
-        let ranges: Vec<ByteRange> = loop_state
-            .transitions
-            .iter()
-            .map(|(r, _)| r.clone())
-            .collect();
+        let ranges: Vec<ByteRange> = loop_state.transitions.iter().map(|(r, _)| *r).collect();
 
         // The target should have epsilon back to loop_start (completing the loop)
         let target_state = &inner_nfa.states[target as usize];
@@ -986,10 +978,11 @@ impl<'a> StepExtractor<'a> {
         }
 
         // Simple case: target has single epsilon back to loop_start
-        if target_state.epsilon.len() == 1 && target_state.epsilon[0] == loop_start {
-            if !visited[loop_start as usize] {
-                return Some((ranges, exit_state));
-            }
+        if target_state.epsilon.len() == 1
+            && target_state.epsilon[0] == loop_start
+            && !visited[loop_start as usize]
+        {
+            return Some((ranges, exit_state));
         }
 
         None
