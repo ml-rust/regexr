@@ -561,13 +561,14 @@ impl HirTranslator {
             return self.build_negated_unicode_class(byte_ranges, utf8_sequences);
         }
 
-        // With trie-based construction, we can handle larger Unicode classes efficiently
-        // because common UTF-8 prefixes are shared. Only fall back to CodepointClass
-        // for extremely large classes where even the trie would be slow.
+        // IMPORTANT: Multi-byte UTF-8 sequences must use CodepointClass to ensure
+        // matches only occur at valid UTF-8 codepoint boundaries. The trie-based approach
+        // creates byte-level transitions that can match at partial UTF-8 sequences,
+        // causing panics when slicing strings at non-character boundaries.
         //
-        // Note: CodepointClass requires PikeVM which is ~10x slower than LazyDFA.
-        // The trie approach keeps everything in LazyDFA-compatible byte transitions.
-        if utf8_sequences.len() > 5000 {
+        // Note: CodepointClass requires PikeVM which is slower than LazyDFA, but
+        // correctness is more important than performance here.
+        if !utf8_sequences.is_empty() {
             return self.build_unicode_codepoint_class(byte_ranges, utf8_sequences, negated);
         }
 
@@ -930,88 +931,81 @@ mod tests {
 
     #[test]
     fn test_translate_unicode_class_greek() {
-        // [α-ω] should produce alternation with 2-byte UTF-8 sequences
+        // [α-ω] should produce UnicodeCpClass to ensure correct UTF-8 boundary matching
         let ast = parse("[α-ω]").unwrap();
         let hir = HirTranslator::new().translate(&ast).unwrap();
 
-        // Greek lowercase letters are 2-byte UTF-8 (U+03B1-U+03C9)
-        // Should produce an Alt with multiple Concat sequences
+        // Greek lowercase letters (U+03B1-U+03C9) should be represented as UnicodeCpClass
+        // to ensure matches only occur at valid UTF-8 codepoint boundaries
         match hir.expr {
-            HirExpr::Alt(alts) => {
-                // All alternatives should be 2-byte sequences (Concat of 2 elements)
-                for alt in &alts {
-                    match alt {
-                        HirExpr::Concat(parts) => {
-                            assert_eq!(parts.len(), 2, "Greek letters are 2-byte UTF-8");
-                        }
-                        _ => panic!("Expected Concat for 2-byte UTF-8"),
-                    }
-                }
+            HirExpr::UnicodeCpClass(cpclass) => {
+                // Should contain Greek letters range
+                assert!(!cpclass.ranges.is_empty());
+                assert!(!cpclass.negated);
+                // Verify the range covers Greek lowercase (α=0x3B1, ω=0x3C9)
+                assert!(cpclass
+                    .ranges
+                    .iter()
+                    .any(|&(start, end)| start <= 0x3B1 && end >= 0x3C9));
             }
-            _ => panic!("Expected Alt for Unicode class, got {:?}", hir.expr),
+            _ => panic!(
+                "Expected UnicodeCpClass for Unicode class, got {:?}",
+                hir.expr
+            ),
         }
     }
 
     #[test]
     fn test_translate_unicode_single_char() {
-        // [α] should produce a single 2-byte sequence
+        // [α] should produce UnicodeCpClass for single multi-byte char
         let ast = parse("[α]").unwrap();
         let hir = HirTranslator::new().translate(&ast).unwrap();
 
-        // Single Greek letter - should be Concat of 2 literals/classes
+        // Single Greek letter should be UnicodeCpClass
         match hir.expr {
-            HirExpr::Concat(parts) => {
-                assert_eq!(parts.len(), 2);
+            HirExpr::UnicodeCpClass(cpclass) => {
+                // Should contain single codepoint (α=0x3B1)
+                assert!(!cpclass.ranges.is_empty());
+                assert!(cpclass
+                    .ranges
+                    .iter()
+                    .any(|&(start, end)| start == 0x3B1 && end == 0x3B1));
             }
-            _ => panic!("Expected Concat for single 2-byte char, got {:?}", hir.expr),
+            _ => panic!(
+                "Expected UnicodeCpClass for single multi-byte char, got {:?}",
+                hir.expr
+            ),
         }
     }
 
     #[test]
     fn test_translate_mixed_ascii_unicode() {
         // [a-zα-ω] should match both ASCII and Greek letters
-        let ast = parse("[a-zα-ω]").unwrap();
-        let hir = HirTranslator::new().translate(&ast).unwrap();
+        // Use the Regex API which selects the correct engine (PikeVM for CodepointClass)
+        let re = crate::Regex::new("[a-zα-ω]").unwrap();
 
-        // Compile to NFA and verify it matches correctly (functional test)
-        let nfa = crate::nfa::compile(&Hir {
-            expr: hir.expr,
-            props: hir.props,
-        })
-        .unwrap();
-
-        let mut dfa = crate::dfa::LazyDfa::new(nfa);
         // ASCII letters should match
-        assert!(dfa.is_match_bytes(b"a"));
-        assert!(dfa.is_match_bytes(b"z"));
+        assert!(re.is_match("a"));
+        assert!(re.is_match("z"));
         // Greek letters should match
-        assert!(dfa.is_match_bytes("α".as_bytes()));
-        assert!(dfa.is_match_bytes("ω".as_bytes()));
+        assert!(re.is_match("α"));
+        assert!(re.is_match("ω"));
         // Non-matching characters
-        assert!(!dfa.is_match_bytes(b"A"));
-        assert!(!dfa.is_match_bytes(b"1"));
+        assert!(!re.is_match("A"));
+        assert!(!re.is_match("1"));
     }
 
     #[test]
     fn test_translate_emoji_class() {
-        // [😀-😂] should produce UTF-8 byte transitions that can match 4-byte emoji
-        let ast = parse("[😀-😂]").unwrap();
-        let hir = HirTranslator::new().translate(&ast).unwrap();
+        // [😀-😂] should match emoji correctly using UnicodeCpClass
+        // Use the Regex API which selects the correct engine (PikeVM for CodepointClass)
+        let re = crate::Regex::new("[😀-😂]").unwrap();
 
-        // Compile to NFA and verify it matches correctly
-        let nfa = crate::nfa::compile(&Hir {
-            expr: hir.expr,
-            props: hir.props,
-        })
-        .unwrap();
-
-        // The NFA should be able to match these emoji (functional test)
-        let mut dfa = crate::dfa::LazyDfa::new(nfa);
-        assert!(dfa.is_match_bytes("😀".as_bytes()));
-        assert!(dfa.is_match_bytes("😁".as_bytes()));
-        assert!(dfa.is_match_bytes("😂".as_bytes()));
+        assert!(re.is_match("😀"));
+        assert!(re.is_match("😁"));
+        assert!(re.is_match("😂"));
         // Should not match emoji outside the range
-        assert!(!dfa.is_match_bytes("a".as_bytes()));
+        assert!(!re.is_match("a"));
     }
 
     #[test]

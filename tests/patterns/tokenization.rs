@@ -765,3 +765,157 @@ fn test_cl100k_numbers() {
     // Should be split into 3-digit chunks
     assert_eq!(tokens, vec!["123", "456", "789"]);
 }
+
+// =============================================================================
+// O200K_BASE Tokenizer Pattern Tests (OpenAI GPT-4o)
+// =============================================================================
+
+/// The actual o200k_base pattern used by OpenAI's GPT-4o tokenizer.
+/// This pattern is more complex than cl100k_base, with additional Unicode
+/// property matching for better handling of international text.
+const O200K_PATTERN: &str = r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
+
+/// Basic o200k tokenization test.
+#[test]
+fn test_o200k_basic_tokenization() {
+    let re = regex(O200K_PATTERN);
+
+    let text = "Hello world";
+    let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0], "Hello");
+    assert_eq!(tokens[1], " world");
+}
+
+/// Test o200k with whitespace (same as cl100k behavior).
+#[test]
+fn test_o200k_whitespace_tokenization() {
+    let re = regex(O200K_PATTERN);
+
+    let text = "hello   world";
+    let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+
+    assert_eq!(tokens.len(), 3, "Should have 3 tokens");
+    assert_eq!(tokens[0], "hello", "First token should be 'hello'");
+    assert_eq!(tokens[1], "  ", "Second token should be 2 spaces");
+    assert_eq!(tokens[2], " world", "Third token should be ' world'");
+}
+
+/// Test o200k contractions.
+#[test]
+fn test_o200k_contractions() {
+    let re = regex(O200K_PATTERN);
+
+    let text = "I'm you're they've we'll";
+    let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+
+    // o200k keeps contractions attached to words
+    assert!(tokens.iter().any(|t| t.contains("'m")));
+    assert!(tokens.iter().any(|t| t.contains("'re")));
+    assert!(tokens.iter().any(|t| t.contains("'ve")));
+    assert!(tokens.iter().any(|t| t.contains("'ll")));
+}
+
+/// Test o200k number chunking.
+#[test]
+fn test_o200k_numbers() {
+    let re = regex(O200K_PATTERN);
+
+    let text = "123456789";
+    let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+
+    // Should be split into 3-digit chunks
+    assert_eq!(tokens, vec!["123", "456", "789"]);
+}
+
+/// Regression test: UTF-8 boundary handling with em-dash.
+/// This test catches bugs where regex match positions fall inside
+/// multi-byte UTF-8 characters.
+#[test]
+fn test_o200k_utf8_em_dash() {
+    let re = regex(O200K_PATTERN);
+
+    // Em-dash (—) is 3 bytes in UTF-8
+    let text = "word—word";
+    let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+
+    // Should not panic and should produce valid tokens
+    assert!(!tokens.is_empty());
+
+    // Verify we can reconstruct the original text
+    let reconstructed: String = tokens.concat();
+    assert_eq!(reconstructed, text);
+}
+
+/// Regression test: UTF-8 boundary with curly quotes.
+#[test]
+fn test_o200k_utf8_curly_quotes() {
+    let re = regex(O200K_PATTERN);
+
+    // Curly quotes are 3 bytes each in UTF-8
+    let text = "He said, \u{2018}Hello\u{2019} and \u{201c}Goodbye\u{201d}.";
+    let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+
+    assert!(!tokens.is_empty());
+
+    let reconstructed: String = tokens.concat();
+    assert_eq!(reconstructed, text);
+}
+
+/// Regression test: Multiple em-dashes in sequence.
+#[test]
+fn test_o200k_utf8_multiple_em_dashes() {
+    let re = regex(O200K_PATTERN);
+
+    let texts = [
+        "word—word",
+        "a—b",
+        "test—",
+        "—start",
+        "one—two—three",
+        "Check your brake pads or rotors—they might be worn out.",
+        "I'm sorry you're hurting—breakups suck, but you'll get through it.",
+        "Check if you're using valid credentials—API key, token—in headers.",
+    ];
+
+    for text in texts {
+        let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+        assert!(!tokens.is_empty(), "Should find tokens in: {}", text);
+
+        let reconstructed: String = tokens.concat();
+        assert_eq!(
+            reconstructed, text,
+            "Should reconstruct original text: {}",
+            text
+        );
+    }
+}
+
+/// Test o200k with mixed Unicode scripts.
+#[test]
+fn test_o200k_mixed_unicode() {
+    let re = regex(O200K_PATTERN);
+
+    let text = "Hello 你好 World 世界";
+    let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+
+    assert!(!tokens.is_empty());
+
+    let reconstructed: String = tokens.concat();
+    assert_eq!(reconstructed, text);
+}
+
+/// Test o200k with emoji.
+#[test]
+fn test_o200k_emoji() {
+    let re = regex(O200K_PATTERN);
+
+    let text = "Hello 😀 World 🎉";
+    let tokens: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+
+    assert!(!tokens.is_empty());
+
+    let reconstructed: String = tokens.concat();
+    assert_eq!(reconstructed, text);
+}

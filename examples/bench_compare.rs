@@ -501,5 +501,28 @@ fn main() {
         CL100K_ITERATIONS,
     ));
 
+    // 18. O200K_BASE - OpenAI GPT-4o tokenizer pattern
+    // More complex than cl100k with additional Unicode property classes
+    // Also uses negative lookahead (?!\S)
+    const O200K_ITERATIONS: u32 = 1;
+    let o200k_pattern = r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
+    let o200k_text = "Hello, world! This is a test of the o200k_base tokenizer pattern. It's designed to handle contractions like I'm, you're, they've, and we'll. Numbers like 123 and 456789 are split into chunks. Special characters @#$%^&*() are handled too.\n".repeat(20);
+    results.push(run_lookaround_bench(
+        "O200K_BASE",
+        o200k_pattern,
+        &o200k_text,
+        O200K_ITERATIONS,
+    ));
+
+    // 19. O200K_BASE with UTF-8 multi-byte characters (regression test)
+    // Tests em-dashes and curly quotes which can cause UTF-8 boundary issues
+    let o200k_utf8_text = "I'm sorry you're hurting—breakups suck, but you'll get through it. Check if you're using valid credentials—API key, token—in headers. He said, 'Hello' and she replied, \u{201C}Goodbye\u{201D}.\n".repeat(10);
+    results.push(run_lookaround_bench(
+        "O200K_UTF8",
+        o200k_pattern,
+        &o200k_utf8_text,
+        O200K_ITERATIONS,
+    ));
+
     print_table(&results);
 }
