@@ -345,8 +345,16 @@ impl<'a> Iterator for Matches<'a> {
                         let abs_end = *last_end + end;
 
                         // Advance past the match, but ensure progress on empty matches
+                        // For empty matches, advance to the next UTF-8 character boundary
                         *last_end = if abs_start == abs_end {
-                            abs_end + 1
+                            // Find the next char boundary after abs_end
+                            let remaining = &self.text[abs_end..];
+                            let next_char_len = remaining
+                                .chars()
+                                .next()
+                                .map(|c| c.len_utf8())
+                                .unwrap_or(1);
+                            abs_end + next_char_len
                         } else {
                             abs_end
                         };
@@ -388,8 +396,19 @@ impl<'r, 't> Iterator for CapturesIter<'r, 't> {
                 let offset = self.last_end;
 
                 // Advance past the match, but ensure progress on empty matches
+                // For empty matches, advance to the next UTF-8 character boundary
                 let abs_end = offset + end;
-                self.last_end = if start == end { abs_end + 1 } else { abs_end };
+                self.last_end = if start == end {
+                    let remaining = &self.text[abs_end..];
+                    let next_char_len = remaining
+                        .chars()
+                        .next()
+                        .map(|c| c.len_utf8())
+                        .unwrap_or(1);
+                    abs_end + next_char_len
+                } else {
+                    abs_end
+                };
 
                 // Adjust all slot positions to absolute positions
                 let adjusted_slots: Vec<_> = slots

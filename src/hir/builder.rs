@@ -79,8 +79,14 @@ impl HirTranslator {
             Expr::Literal(c) => self.translate_literal(*c),
 
             Expr::Dot => {
-                // Dot matches any byte except newline
-                Ok(HirExpr::Class(HirClass::dot()))
+                // Dot matches any byte except newline (unless dot_all mode is enabled)
+                if self.flags.dot_all {
+                    // (?s) mode: dot matches ANY byte including newline
+                    Ok(HirExpr::Class(HirClass::any_byte()))
+                } else {
+                    // Default: dot matches any byte except newline
+                    Ok(HirExpr::Class(HirClass::dot()))
+                }
             }
 
             Expr::Concat(exprs) => {

@@ -86,18 +86,6 @@ impl JitShiftOr {
     /// Finds the first match in the input, returning (start, end).
     #[inline]
     pub fn find(&self, input: &[u8]) -> Option<(usize, usize)> {
-        // Fast path: nullable patterns match empty string at position 0
-        // Note: JitShiftOr is only created for patterns without word boundaries,
-        // so we don't need to check has_leading_wb/has_trailing_wb here.
-        if self.nullable {
-            return Some((0, 0));
-        }
-
-        // Empty input can't match (nullable already handled above)
-        if input.is_empty() {
-            return None;
-        }
-
         // For patterns with word boundaries, fall back to Rust implementation
         // Note: This path should never be taken since engine selection
         // doesn't create JitShiftOr for patterns with word boundaries.
@@ -105,15 +93,22 @@ impl JitShiftOr {
             return self.find_with_word_boundaries(input);
         }
 
-        // Call JIT code - hot path, keep minimal
-        let result = self.call_find(input);
-        if result >= 0 {
-            // JIT returns packed (start << 32 | end)
-            let packed = result as u64;
-            Some(((packed >> 32) as usize, (packed & 0xFFFF_FFFF) as usize))
-        } else {
-            None
+        // Try to find a non-empty match first (greedy)
+        if !input.is_empty() {
+            let result = self.call_find(input);
+            if result >= 0 {
+                // JIT returns packed (start << 32 | end)
+                let packed = result as u64;
+                return Some(((packed >> 32) as usize, (packed & 0xFFFF_FFFF) as usize));
+            }
         }
+
+        // If pattern is nullable and no non-empty match found, return empty match at 0
+        if self.nullable {
+            return Some((0, 0));
+        }
+
+        None
     }
 
     #[inline(always)]

@@ -369,3 +369,164 @@ fn test_alternation_match_length() {
     assert_eq!(m2.as_str(), "bird");
     assert_eq!(m2.len(), 4);
 }
+
+// =============================================================================
+// UTF-8 Boundary Handling
+// =============================================================================
+// Tests for proper UTF-8 character boundary handling in iterators.
+// Found via rebar benchmarks - empty matches caused panics on multi-byte chars.
+
+#[test]
+fn test_utf8_bom_handling() {
+    // BOM is 3 bytes: \u{feff} = EF BB BF
+    let text_with_bom = "\u{feff}Hello";
+    let re = regex(".*");
+
+    // Should not panic when iterating matches on text starting with BOM
+    let matches: Vec<_> = re.find_iter(text_with_bom).collect();
+    assert!(!matches.is_empty());
+}
+
+#[test]
+fn test_utf8_multibyte_iteration() {
+    // Test iteration over text with multi-byte UTF-8 characters
+    let text = "héllo wörld";
+    let re = regex(""); // Empty pattern matches at every position
+
+    // Should not panic - must advance by char boundaries, not bytes
+    let count = re.find_iter(text).count();
+    // Empty pattern should match at each character position (11 chars + final)
+    assert!(count > 0);
+}
+
+#[test]
+fn test_utf8_emoji_iteration() {
+    // Emoji can be 4 bytes
+    let text = "a😀b";
+    let re = regex(""); // Empty pattern
+
+    // Should handle 4-byte emoji correctly
+    let matches: Vec<_> = re.find_iter(text).collect();
+    assert!(!matches.is_empty());
+}
+
+#[test]
+fn test_empty_match_advancement() {
+    // Empty matches should advance by one character, not one byte
+    let text = "abc";
+    let re = regex("");
+
+    let matches: Vec<_> = re.find_iter(text).collect();
+    // Should match at positions: before 'a', before 'b', before 'c', after 'c'
+    assert_eq!(matches.len(), 4);
+}
+
+// =============================================================================
+// Rebar Benchmark Patterns (Sherlock)
+// =============================================================================
+// These patterns come from the rebar benchmark suite's sherlock tests.
+
+#[test]
+fn test_sherlock_name_patterns() {
+    // Basic literal patterns from sherlock benchmarks
+    let re_sherlock = regex("Sherlock");
+    let re_holmes = regex("Holmes");
+    let re_both = regex("Sherlock Holmes");
+
+    let text = "Sherlock Holmes is a detective. Holmes solved the case.";
+
+    assert_eq!(re_sherlock.find_iter(text).count(), 1);
+    assert_eq!(re_holmes.find_iter(text).count(), 2);
+    assert_eq!(re_both.find_iter(text).count(), 1);
+}
+
+#[test]
+fn test_sherlock_alternation_patterns() {
+    // Alternation patterns from sherlock benchmarks (name-alt1 through name-alt5)
+    let re_alt1 = regex("Sherlock|Street");
+    let re_alt2 = regex("Sherlock|Holmes");
+    let re_alt3 = regex("Sherlock|Holmes|Watson");
+
+    let text = "Sherlock Holmes and Watson walked down Baker Street";
+
+    assert!(re_alt1.find_iter(text).count() >= 2); // Sherlock, Street
+    assert!(re_alt2.find_iter(text).count() >= 2); // Sherlock, Holmes
+    assert!(re_alt3.find_iter(text).count() >= 3); // Sherlock, Holmes, Watson
+}
+
+#[test]
+fn test_long_literal_over_8_chars() {
+    // Literals longer than 8 characters should match completely
+    // This tests the fix for truncated prefix extraction
+    let re = regex("Investigating");
+    let text = "Sherlock was Investigating the crime";
+
+    let m = re.find(text).unwrap();
+    assert_eq!(m.as_str(), "Investigating");
+    assert_eq!(m.len(), 13);
+}
+
+#[test]
+fn test_long_alternation_all_over_8_chars() {
+    // All alternatives are longer than 8 characters
+    let re = regex("Investigating|Encyclopedia|Understanding");
+
+    let text = "The Encyclopedia contains Understanding of Investigating";
+    let matches: Vec<_> = re.find_iter(text).collect();
+
+    assert_eq!(matches.len(), 3);
+    assert_eq!(matches[0].as_str(), "Encyclopedia");
+    assert_eq!(matches[1].as_str(), "Understanding");
+    assert_eq!(matches[2].as_str(), "Investigating");
+}
+
+// =============================================================================
+// Case-Insensitive Tests (Known Limitations)
+// =============================================================================
+// These tests document case-insensitive matching behavior.
+// Some may fail if case-insensitive isn't fully implemented for all engines.
+
+#[test]
+fn test_case_insensitive_basic() {
+    let re = regex("(?i)sherlock");
+    let text = "SHERLOCK and Sherlock and sherlock";
+
+    let count = re.find_iter(text).count();
+    assert_eq!(count, 3, "Should match all case variants");
+}
+
+#[test]
+fn test_case_insensitive_alternation() {
+    let re = regex("(?i)sherlock|holmes|watson");
+    let text = "SHERLOCK HOLMES and Watson";
+
+    let count = re.find_iter(text).count();
+    assert_eq!(count, 3);
+}
+
+// =============================================================================
+// Unicode Property Tests (Known Limitations)
+// =============================================================================
+// These tests document Unicode property matching behavior.
+
+#[test]
+fn test_unicode_letter_property() {
+    // Note: Unicode properties require braces: \p{L} not \pL
+    let re = regex(r"\p{L}+");
+    let text = "Hello Wörld";
+
+    let matches: Vec<_> = re.find_iter(text).collect();
+    assert_eq!(matches.len(), 2);
+    assert_eq!(matches[0].as_str(), "Hello");
+    assert_eq!(matches[1].as_str(), "Wörld");
+}
+
+#[test]
+fn test_unicode_dot_all() {
+    // (?s) dotall mode: .* should match across newlines
+    let re = regex("(?s).*");
+    let text = "Line1\nLine2";
+
+    let m = re.find(text).unwrap();
+    assert_eq!(m.as_str(), text);
+}

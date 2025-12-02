@@ -226,6 +226,15 @@ impl HirClass {
             negated: false,
         }
     }
+
+    /// Creates a class matching any byte (including newline).
+    /// Used for (?s) dot-all mode.
+    pub fn any_byte() -> Self {
+        Self {
+            ranges: vec![(0, 255)],
+            negated: false,
+        }
+    }
 }
 
 /// A repetition in HIR.

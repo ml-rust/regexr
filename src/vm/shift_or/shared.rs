@@ -167,17 +167,18 @@ impl ShiftOr {
 
     /// Finds the first match, returning (start, end).
     pub fn find(&self, input: &[u8]) -> Option<(usize, usize)> {
-        // Handle nullable patterns (can match empty string)
-        if self.nullable {
-            return Some((0, 0));
-        }
-
-        // Try matching at each position
+        // Try matching at each position, preferring longest match (greedy)
         for start in 0..=input.len() {
             if let Some(end) = self.match_at(input, start) {
                 return Some((start, end));
             }
         }
+
+        // If pattern is nullable and no non-empty match found, return empty match at 0
+        if self.nullable {
+            return Some((0, 0));
+        }
+
         None
     }
 
@@ -377,15 +378,18 @@ impl ShiftOrWide {
 
     /// Finds the first match, returning (start, end).
     pub fn find(&self, input: &[u8]) -> Option<(usize, usize)> {
-        if self.nullable {
-            return Some((0, 0));
-        }
-
+        // Try matching at each position, preferring longest match (greedy)
         for start in 0..=input.len() {
             if let Some(end) = self.match_at(input, start) {
                 return Some((start, end));
             }
         }
+
+        // If pattern is nullable and no non-empty match found, return empty match at 0
+        if self.nullable {
+            return Some((0, 0));
+        }
+
         None
     }
 
