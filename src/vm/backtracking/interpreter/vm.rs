@@ -4,7 +4,7 @@
 //! for efficient execution. Unlike tree-walking interpreters, this compiles HIR
 //! to a flat bytecode representation first, then executes with minimal overhead.
 
-use crate::hir::{Hir, HirAnchor, HirExpr};
+use crate::hir::{CodepointClass, Hir, HirAnchor, HirExpr};
 
 use super::super::shared::{decode_utf8, is_word_byte, Op};
 
@@ -17,7 +17,8 @@ pub struct BacktrackingVm {
     /// Large byte classes (for classes with >4 ranges).
     byte_classes: Vec<Vec<(u8, u8)>>,
     /// Large codepoint classes (for Unicode classes with multiple ranges).
-    cp_classes: Vec<Vec<(u32, u32)>>,
+    /// Uses CodepointClass for fast ASCII bitmap lookup.
+    cp_classes: Vec<CodepointClass>,
 }
 
 impl BacktrackingVm {
@@ -285,8 +286,9 @@ impl BacktrackingVm {
 
                 Op::CpClassRef { index, negated } => {
                     if let Some((cp, len)) = decode_utf8(&input[pos..]) {
-                        let ranges = &self.cp_classes[index as usize];
-                        let in_class = ranges.iter().any(|&(lo, hi)| cp >= lo && cp <= hi);
+                        let cpclass = &self.cp_classes[index as usize];
+                        // Use CodepointClass::contains() which has ASCII bitmap fast path
+                        let in_class = cpclass.contains_raw(cp);
                         let matched = if negated { !in_class } else { in_class };
                         if matched {
                             pos += len;
@@ -484,7 +486,7 @@ impl BacktrackingVm {
 struct Compiler {
     code: Vec<Op>,
     byte_classes: Vec<Vec<(u8, u8)>>,
-    cp_classes: Vec<Vec<(u32, u32)>>,
+    cp_classes: Vec<CodepointClass>,
 }
 
 impl Compiler {
@@ -552,9 +554,9 @@ impl Compiler {
                         self.emit(Op::CpRange(lo, hi));
                     }
                 } else if !class.ranges.is_empty() {
-                    // Multiple ranges - store in cp_classes table and use CpClassRef
+                    // Multiple ranges - store full CodepointClass for ASCII bitmap optimization
                     let index = self.cp_classes.len() as u16;
-                    self.cp_classes.push(class.ranges.clone());
+                    self.cp_classes.push(class.clone());
                     self.emit(Op::CpClassRef {
                         index,
                         negated: class.negated,

@@ -97,22 +97,47 @@ impl CodepointClass {
         bitmap
     }
 
-    /// Fast path: checks if an ASCII codepoint (< 128) is in this class.
-    /// Returns the result with negation already applied.
-    #[inline(always)]
-    pub fn contains_ascii(&self, cp: u32) -> bool {
-        debug_assert!(cp < 128);
-        let in_bitmap = if cp < 64 {
-            (self.ascii_bitmap[0] & (1u64 << cp)) != 0
-        } else {
-            (self.ascii_bitmap[1] & (1u64 << (cp - 64))) != 0
-        };
-        if self.negated { !in_bitmap } else { in_bitmap }
+    /// Checks if a codepoint is in the ranges (ignoring negation flag).
+    /// Uses fast bitmap lookup for ASCII (< 128), binary search for others.
+    /// This is useful when negation is handled separately by the caller.
+    #[inline]
+    pub fn contains_raw(&self, cp: u32) -> bool {
+        // Fast path for ASCII codepoints using precomputed bitmap
+        if cp < 128 {
+            return if cp < 64 {
+                (self.ascii_bitmap[0] & (1u64 << cp)) != 0
+            } else {
+                (self.ascii_bitmap[1] & (1u64 << (cp - 64))) != 0
+            };
+        }
+
+        // Slow path for non-ASCII: binary search over ranges
+        self.ranges.binary_search_by(|&(start, end)| {
+            if cp < start {
+                std::cmp::Ordering::Greater
+            } else if cp > end {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        }).is_ok()
     }
 
     /// Checks if a codepoint is in this class.
+    /// Uses fast bitmap lookup for ASCII (< 128), binary search for others.
     #[inline]
     pub fn contains(&self, cp: u32) -> bool {
+        // Fast path for ASCII codepoints using precomputed bitmap
+        if cp < 128 {
+            let in_bitmap = if cp < 64 {
+                (self.ascii_bitmap[0] & (1u64 << cp)) != 0
+            } else {
+                (self.ascii_bitmap[1] & (1u64 << (cp - 64))) != 0
+            };
+            return if self.negated { !in_bitmap } else { in_bitmap };
+        }
+
+        // Slow path for non-ASCII: binary search over ranges
         let in_ranges = self.ranges.binary_search_by(|&(start, end)| {
             if cp < start {
                 std::cmp::Ordering::Greater
