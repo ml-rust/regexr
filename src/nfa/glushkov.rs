@@ -471,34 +471,59 @@ impl GlushkovBuilder {
             }
 
             HirExpr::Repeat(rep) => {
-                let inner = self.build_expr(&rep.expr)?;
+                // Handle bounded repeats by unrolling.
+                // This is necessary because Glushkov NFA requires distinct positions
+                // for each character match. A pattern like a{3} needs 3 positions,
+                // not 1 position with a self-loop.
 
-                // For repetition with unbounded max (*, +, {n,}), Last positions
-                // can go back to First positions. This enables loop behavior.
-                // But for bounded repetition like ? ({0,1}), we don't add a loop.
-                let allows_repetition = rep.max.is_none() || rep.max > Some(1);
+                let min = rep.min;
+                let max = rep.max;
 
-                if allows_repetition {
-                    for pos in 0..MAX_POSITIONS {
-                        if (inner.last >> pos) & 1 != 0 && pos < self.follow.len() {
-                            self.follow[pos] |= inner.first;
-                        }
+                match (min, max) {
+                    // E? = {0,1} - optional, no unrolling needed
+                    (0, Some(1)) => {
+                        let inner = self.build_expr(&rep.expr)?;
+                        Some(ExprInfo {
+                            first: inner.first,
+                            last: inner.last,
+                            nullable: true,
+                        })
                     }
-                }
 
-                match (rep.min, rep.max) {
-                    // E? or E* - zero or more (nullable)
-                    (0, _) => Some(ExprInfo {
-                        first: inner.first,
-                        last: inner.last,
-                        nullable: true,
-                    }),
-                    // E+ or E{n,} with n >= 1
-                    _ => Some(ExprInfo {
-                        first: inner.first,
-                        last: inner.last,
-                        nullable: inner.nullable,
-                    }),
+                    // E* = {0,} - zero or more with self-loop
+                    (0, None) => {
+                        let inner = self.build_expr(&rep.expr)?;
+                        // Add self-loop: last -> first
+                        for pos in 0..MAX_POSITIONS {
+                            if (inner.last >> pos) & 1 != 0 && pos < self.follow.len() {
+                                self.follow[pos] |= inner.first;
+                            }
+                        }
+                        Some(ExprInfo {
+                            first: inner.first,
+                            last: inner.last,
+                            nullable: true,
+                        })
+                    }
+
+                    // E+ = {1,} - one or more with self-loop
+                    (1, None) => {
+                        let inner = self.build_expr(&rep.expr)?;
+                        // Add self-loop: last -> first
+                        for pos in 0..MAX_POSITIONS {
+                            if (inner.last >> pos) & 1 != 0 && pos < self.follow.len() {
+                                self.follow[pos] |= inner.first;
+                            }
+                        }
+                        Some(ExprInfo {
+                            first: inner.first,
+                            last: inner.last,
+                            nullable: inner.nullable,
+                        })
+                    }
+
+                    // E{n} or E{n,m} or E{n,} where n > 1 - needs unrolling
+                    _ => self.build_bounded_repeat(&rep.expr, min, max),
                 }
             }
 
@@ -512,6 +537,133 @@ impl GlushkovBuilder {
             // They use a special instruction that consumes variable-length UTF-8
             HirExpr::UnicodeCpClass(_) => None,
         }
+    }
+
+    /// Builds a bounded repeat by unrolling into concatenated copies.
+    ///
+    /// For E{n,m}:
+    /// - Unroll n required copies: E E E ... (n times)
+    /// - Unroll m-n optional copies that can each be skipped
+    ///
+    /// For E{n,}:
+    /// - Unroll n copies, with the last one having a self-loop
+    fn build_bounded_repeat(
+        &mut self,
+        expr: &HirExpr,
+        min: u32,
+        max: Option<u32>,
+    ) -> Option<ExprInfo> {
+        // Handle E{0,m} - all optional
+        if min == 0 {
+            return self.build_optional_repeat(expr, max.unwrap_or(1) as usize);
+        }
+
+        let min = min as usize;
+
+        // Build required copies: E E E ... (min times)
+        // First copy
+        let mut result = self.build_expr(expr)?;
+        let mut prev_last = result.last;
+
+        // Remaining required copies
+        for _ in 1..min {
+            let copy = self.build_expr(expr)?;
+
+            // Connect previous last to current first
+            for pos in 0..MAX_POSITIONS {
+                if (prev_last >> pos) & 1 != 0 && pos < self.follow.len() {
+                    self.follow[pos] |= copy.first;
+                }
+            }
+
+            // Update result
+            // First stays the same (from the first copy)
+            // Last becomes the current copy's last
+            result.last = copy.last;
+            result.nullable = result.nullable && copy.nullable;
+            prev_last = copy.last;
+        }
+
+        // Handle the optional/unbounded part
+        match max {
+            None => {
+                // E{n,} - add self-loop on the last positions
+                // The last positions should be able to transition back to themselves
+                // or to the start of another copy of the inner expression.
+                // Since we want "one or more additional matches", we add a self-loop.
+                for pos in 0..MAX_POSITIONS {
+                    if (result.last >> pos) & 1 != 0 && pos < self.follow.len() {
+                        self.follow[pos] |= result.last;
+                    }
+                }
+                Some(result)
+            }
+            Some(max_val) => {
+                let max = max_val as usize;
+                let optional_count = max - min;
+
+                if optional_count == 0 {
+                    // E{n} - exact count, no optional part
+                    return Some(result);
+                }
+
+                // E{n,m} - add optional copies
+                // Each optional copy can be skipped, so we track all possible end positions
+                let mut can_end = result.last;
+
+                for _ in 0..optional_count {
+                    let copy = self.build_expr(expr)?;
+
+                    // Connect previous last positions to current first
+                    for pos in 0..MAX_POSITIONS {
+                        if (prev_last >> pos) & 1 != 0 && pos < self.follow.len() {
+                            self.follow[pos] |= copy.first;
+                        }
+                    }
+
+                    // Update tracking
+                    prev_last = copy.last;
+                    can_end |= copy.last; // This copy's end is also a valid end
+                }
+
+                result.last = can_end;
+                Some(result)
+            }
+        }
+    }
+
+    /// Builds an optional repeat E{0,m} as a chain where any position can end.
+    fn build_optional_repeat(&mut self, expr: &HirExpr, max: usize) -> Option<ExprInfo> {
+        if max == 0 {
+            return Some(ExprInfo::empty());
+        }
+
+        // Build first optional copy
+        let first_copy = self.build_expr(expr)?;
+        let mut result = ExprInfo {
+            first: first_copy.first,
+            last: first_copy.last,
+            nullable: true, // Always nullable since min=0
+        };
+        let mut prev_last = first_copy.last;
+
+        // Build remaining optional copies
+        for _ in 1..max {
+            let copy = self.build_expr(expr)?;
+
+            // Connect previous last to current first
+            for pos in 0..MAX_POSITIONS {
+                if (prev_last >> pos) & 1 != 0 && pos < self.follow.len() {
+                    self.follow[pos] |= copy.first;
+                }
+            }
+
+            // Last includes all copies' last positions (any can be the end)
+            result.last |= copy.last;
+            prev_last = copy.last;
+        }
+
+        Some(result)
     }
 }
 
@@ -819,31 +971,53 @@ impl GlushkovWideBuilder {
             }
 
             HirExpr::Repeat(rep) => {
-                let inner = self.build_expr(&rep.expr)?;
+                // Handle bounded repeats by unrolling (same logic as standard Glushkov)
+                let min = rep.min;
+                let max = rep.max;
 
-                // For repetition with unbounded max (*, +, {n,}), Last positions
-                // can go back to First positions.
-                let allows_repetition = rep.max.is_none() || rep.max > Some(1);
-
-                if allows_repetition {
-                    for pos in inner.last.iter_ones() {
-                        if pos < self.follow.len() {
-                            self.follow[pos].union_assign(inner.first);
-                        }
+                match (min, max) {
+                    // E? = {0,1} - optional, no unrolling needed
+                    (0, Some(1)) => {
+                        let inner = self.build_expr(&rep.expr)?;
+                        Some(WideExprInfo {
+                            first: inner.first,
+                            last: inner.last,
+                            nullable: true,
+                        })
                     }
-                }
 
-                match (rep.min, rep.max) {
-                    (0, _) => Some(WideExprInfo {
-                        first: inner.first,
-                        last: inner.last,
-                        nullable: true,
-                    }),
-                    _ => Some(WideExprInfo {
-                        first: inner.first,
-                        last: inner.last,
-                        nullable: inner.nullable,
-                    }),
+                    // E* = {0,} - zero or more with self-loop
+                    (0, None) => {
+                        let inner = self.build_expr(&rep.expr)?;
+                        for pos in inner.last.iter_ones() {
+                            if pos < self.follow.len() {
+                                self.follow[pos].union_assign(inner.first);
+                            }
+                        }
+                        Some(WideExprInfo {
+                            first: inner.first,
+                            last: inner.last,
+                            nullable: true,
+                        })
+                    }
+
+                    // E+ = {1,} - one or more with self-loop
+                    (1, None) => {
+                        let inner = self.build_expr(&rep.expr)?;
+                        for pos in inner.last.iter_ones() {
+                            if pos < self.follow.len() {
+                                self.follow[pos].union_assign(inner.first);
+                            }
+                        }
+                        Some(WideExprInfo {
+                            first: inner.first,
+                            last: inner.last,
+                            nullable: inner.nullable,
+                        })
+                    }
+
+                    // E{n} or E{n,m} or E{n,} where n > 1 - needs unrolling
+                    _ => self.build_bounded_repeat_wide(&rep.expr, min, max),
                 }
             }
 
@@ -855,6 +1029,105 @@ impl GlushkovWideBuilder {
 
             HirExpr::UnicodeCpClass(_) => None,
         }
+    }
+
+    /// Builds a bounded repeat for wide Glushkov NFA.
+    fn build_bounded_repeat_wide(
+        &mut self,
+        expr: &HirExpr,
+        min: u32,
+        max: Option<u32>,
+    ) -> Option<WideExprInfo> {
+        if min == 0 {
+            return self.build_optional_repeat_wide(expr, max.unwrap_or(1) as usize);
+        }
+
+        let min = min as usize;
+
+        // Build required copies
+        let mut result = self.build_expr(expr)?;
+        let mut prev_last = result.last;
+
+        for _ in 1..min {
+            let copy = self.build_expr(expr)?;
+
+            for pos in prev_last.iter_ones() {
+                if pos < self.follow.len() {
+                    self.follow[pos].union_assign(copy.first);
+                }
+            }
+
+            result.last = copy.last;
+            result.nullable = result.nullable && copy.nullable;
+            prev_last = copy.last;
+        }
+
+        match max {
+            None => {
+                // E{n,} - add self-loop
+                for pos in result.last.iter_ones() {
+                    if pos < self.follow.len() {
+                        self.follow[pos].union_assign(result.last);
+                    }
+                }
+                Some(result)
+            }
+            Some(max_val) => {
+                let max = max_val as usize;
+                let optional_count = max - min;
+
+                if optional_count == 0 {
+                    return Some(result);
+                }
+
+                let mut can_end = result.last;
+                for _ in 0..optional_count {
+                    let copy = self.build_expr(expr)?;
+
+                    for pos in prev_last.iter_ones() {
+                        if pos < self.follow.len() {
+                            self.follow[pos].union_assign(copy.first);
+                        }
+                    }
+
+                    prev_last = copy.last;
+                    can_end = can_end.union(copy.last);
+                }
+
+                result.last = can_end;
+                Some(result)
+            }
+        }
+    }
+
+    /// Builds an optional repeat for wide Glushkov NFA.
+    fn build_optional_repeat_wide(&mut self, expr: &HirExpr, max: usize) -> Option<WideExprInfo> {
+        if max == 0 {
+            return Some(WideExprInfo::empty());
+        }
+
+        let first_copy = self.build_expr(expr)?;
+        let mut result = WideExprInfo {
+            first: first_copy.first,
+            last: first_copy.last,
+            nullable: true,
+        };
+        let mut prev_last = first_copy.last;
+
+        for _ in 1..max {
+            let copy = self.build_expr(expr)?;
+
+            for pos in prev_last.iter_ones() {
+                if pos < self.follow.len() {
+                    self.follow[pos].union_assign(copy.first);
+                }
+            }
+
+            result.last = result.last.union(copy.last);
+            prev_last = copy.last;
+        }
+
+        Some(result)
     }
 }
 

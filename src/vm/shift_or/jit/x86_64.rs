@@ -30,8 +30,7 @@ impl ShiftOrJitCompiler {
         let follow_ptr = follow.as_ptr() as u64;
 
         let mut ops = dynasmrt::x64::Assembler::new().ok()?;
-        let find_offset =
-            Self::emit_find(&mut ops, shift_or, masks_ptr, follow_ptr);
+        let find_offset = Self::emit_find(&mut ops, shift_or, masks_ptr, follow_ptr);
 
         let code = ops.finalize().ok()?;
 

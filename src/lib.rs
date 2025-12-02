@@ -117,7 +117,8 @@ impl RegexBuilder {
         let inner = if self.jit {
             engine::compile_with_jit(&hir_result)?
         } else {
-            engine::compile_with_pikevm(&hir_result)?
+            // Use compile_from_hir for optimal engine selection (ShiftOr, LazyDfa, etc.)
+            engine::compile_from_hir(&hir_result)?
         };
 
         Ok(Regex {

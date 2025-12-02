@@ -37,6 +37,9 @@ pub struct HirProps {
     pub has_word_boundary: bool,
     /// Whether the pattern contains non-greedy quantifiers (*?, +?, ??, {n,m}?).
     pub has_non_greedy: bool,
+    /// Whether the pattern contains bounded repeats with explicit min/max ({n}, {n,m}).
+    /// ShiftOr cannot handle these correctly - they need unrolling or a counting engine.
+    pub has_bounded_repeat: bool,
     /// Whether the pattern contains large Unicode character classes.
     /// These cause DFA state explosion and should use PikeVM instead of JIT.
     pub has_large_unicode_class: bool,

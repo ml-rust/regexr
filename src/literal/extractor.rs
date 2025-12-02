@@ -139,14 +139,17 @@ impl LiteralExtractor {
         match expr {
             HirExpr::Literal(bytes) => {
                 // Truncate to max length
-                let prefix = if bytes.len() > self.max_prefix_len {
+                let truncated = bytes.len() > self.max_prefix_len;
+                let prefix = if truncated {
                     bytes[..self.max_prefix_len].to_vec()
                 } else {
                     bytes.clone()
                 };
                 ExtractionResult {
                     prefixes: vec![prefix],
-                    complete: true,
+                    // Only complete if we didn't truncate - truncated prefixes
+                    // cannot provide full match bounds
+                    complete: !truncated,
                     has_nullable_suffix: false,
                 }
             }
@@ -191,6 +194,13 @@ impl LiteralExtractor {
                                 if remaining > 0 {
                                     let extend_len = bytes.len().min(remaining);
                                     prefix.extend_from_slice(&bytes[..extend_len]);
+                                    // If we couldn't fit all bytes, mark incomplete
+                                    if extend_len < bytes.len() {
+                                        result.complete = false;
+                                    }
+                                } else {
+                                    // No room to extend - subsequent literal was skipped
+                                    result.complete = false;
                                 }
                             }
                         } else {
@@ -383,6 +393,8 @@ mod tests {
         let lits = get_literals("helloworld123");
         assert_eq!(lits.prefixes.len(), 1);
         assert_eq!(lits.prefixes[0], b"hellowor"); // Truncated to 8 bytes
+                                                   // Truncated literals cannot be "complete" - they're only prefixes
+        assert!(!lits.prefix_complete);
     }
 
     #[test]
