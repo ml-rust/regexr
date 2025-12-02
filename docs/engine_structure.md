@@ -32,7 +32,7 @@ src/{engine_type}/{engine_name}/
 │   ├── mod.rs
 │   ├── {name}.rs       # JIT struct and public API
 │   ├── x86_64.rs       # x86-64 code generation
-│   ├── aarch64.rs      # ARM64 code generation (future)
+│   ├── aarch64.rs      # ARM64 code generation
 │   └── helpers.rs      # Extern helper functions for JIT
 └── *.rs                # [optional] Engine-specific files as needed
 ```
@@ -100,7 +100,7 @@ src/vm/shift_or/
 
 ### JIT-Gated
 ```rust
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub mod jit;
 ```
 
@@ -133,7 +133,7 @@ pub use aarch64::compile;
 pub mod interpreter;
 mod engine;
 
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub mod jit;
 
 // Re-exports
@@ -198,10 +198,10 @@ The `src/jit/mod.rs` module exists for backwards compatibility and convenience. 
 
 ```rust
 // Re-export from canonical locations
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub use crate::nfa::tagged::jit::{TaggedNfaJit, compile_tagged_nfa};
 
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub use crate::dfa::lazy::jit::{DfaJit, compile_dfa};
 ```
 

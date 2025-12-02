@@ -265,7 +265,7 @@ JIT compilation is beneficial when:
 
 ### JIT Requirements
 
-- Only available on x86-64 architecture
+- Available on x86-64 (Linux, macOS, Windows) and ARM64 (Linux, macOS)
 - Requires `jit` feature flag
 - Automatically falls back to interpreted engines if compilation fails
 
@@ -506,15 +506,21 @@ Ensure the engine matches your expectations for the pattern type.
 
 ### Current Limitations
 
-1. **JIT**: Only available on x86-64 architecture
+1. **SIMD**: Only available on x86-64 with AVX2 support
 2. **Multiline mode**: Currently `.` never matches newline
 3. **Backreferences**: Cannot be combined with JIT DFA (uses BacktrackingJit instead)
 4. **Variable-width lookbehind**: Limited support (fixed-width lookbehind only)
 
 ### Platform Support
 
-- **x86-64**: All features including JIT
-- **Other architectures**: Interpreted engines only (no JIT)
+| Platform | JIT Support | SIMD Support |
+|----------|-------------|--------------|
+| Linux x86-64 | ✓ | ✓ (AVX2) |
+| Linux ARM64 | ✓ | ✗ |
+| macOS x86-64 | ✓ | ✓ (AVX2) |
+| macOS ARM64 (Apple Silicon) | ✓ | ✗ |
+| Windows x86-64 | ✓ | ✓ (AVX2) |
+| Other | ✗ | ✗ |
 
 ### Feature Compatibility
 

@@ -163,8 +163,19 @@ assert_eq!(result, "abc NUM def NUM");
 ## Feature Flags
 
 - `simd` (default): Enables SIMD-accelerated literal search
-- `jit`: Enables JIT compilation for x86-64
+- `jit`: Enables JIT compilation (x86-64 and ARM64)
 - `full`: Enables both JIT and SIMD
+
+### Platform Support
+
+| Platform | JIT Support | SIMD Support |
+|----------|-------------|--------------|
+| Linux x86-64 | ✓ | ✓ (AVX2) |
+| Linux ARM64 | ✓ | ✗ |
+| macOS x86-64 | ✓ | ✓ (AVX2) |
+| macOS ARM64 (Apple Silicon) | ✓ | ✗ |
+| Windows x86-64 | ✓ | ✓ (AVX2) |
+| Other | ✗ | ✗ |
 
 Build without default features for a minimal installation:
 

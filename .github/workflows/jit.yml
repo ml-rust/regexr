@@ -61,6 +61,39 @@ jobs:
       - name: Test (full)
         run: cargo test --features full
 
+  linux-arm64:
+    name: Linux (ARM64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-arm64-cargo-jit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-arm64-cargo-jit-
+            ${{ runner.os }}-arm64-cargo-
+
+      - name: Check (no features)
+        run: cargo check --no-default-features
+
+      - name: Check (jit only)
+        run: cargo check --features jit
+
+      - name: Test (no JIT)
+        run: cargo test --no-default-features
+
+      - name: Test (JIT only)
+        run: cargo test --features jit
+
   windows:
     name: Windows
     runs-on: windows-latest
