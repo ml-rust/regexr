@@ -22,11 +22,11 @@ pub use shift_or::{
     ShiftOrInterpreter, ShiftOrWide,
 };
 
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub use shift_or::JitShiftOr;
 
 // Re-export key types from backtracking module
 pub use backtracking::{BacktrackingEngine, BacktrackingVm};
 
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub use backtracking::{compile_backtracking, BacktrackingJit};

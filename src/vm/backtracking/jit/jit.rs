@@ -7,13 +7,20 @@ use crate::hir::Hir;
 
 use dynasmrt::ExecutableBuffer;
 
+#[cfg(target_arch = "x86_64")]
 use super::x86_64::BacktrackingCompiler;
 
+#[cfg(target_arch = "aarch64")]
+use super::aarch64::BacktrackingCompiler;
+
 // Platform-specific function pointer type
-#[cfg(target_os = "windows")]
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
 type MatchFn = unsafe extern "win64" fn(*const u8, usize, *mut i64) -> i64;
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 type MatchFn = unsafe extern "sysv64" fn(*const u8, usize, *mut i64) -> i64;
+// ARM64 uses AAPCS64 on all platforms (extern "C")
+#[cfg(target_arch = "aarch64")]
+type MatchFn = unsafe extern "C" fn(*const u8, usize, *mut i64) -> i64;
 
 /// A compiled backtracking regex.
 pub struct BacktrackingJit {

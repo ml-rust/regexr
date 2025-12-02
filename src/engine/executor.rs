@@ -15,7 +15,7 @@ use crate::vm::{
     BacktrackingVm, CodepointClassMatcher, PikeVm, PikeVmContext, ShiftOr, ShiftOrWide,
 };
 
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 use crate::jit;
 
 use super::{select_engine, select_engine_from_hir, EngineType};
@@ -45,7 +45,7 @@ pub struct CompiledRegex {
     /// BacktrackingJit for fast single-pass capture extraction in JIT mode.
     /// Used by JitShiftOr when pattern has captures.
     /// This is the JIT equivalent of backtracking_vm.
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     backtracking_jit: Option<jit::BacktrackingJit>,
 }
 
@@ -77,19 +77,19 @@ enum CompiledInner {
     /// Uses liveness analysis for efficient single-pass capture extraction.
     /// Always available (no JIT required).
     TaggedNfaInterp(TaggedNfaEngine),
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     Jit(jit::CompiledRegex),
     /// Tagged NFA JIT engine for patterns with lookaround or non-greedy.
     /// Uses liveness analysis for efficient single-pass capture extraction.
     /// JIT compiles the NFA to native code for better performance.
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     TaggedNfaJit(jit::TaggedNfaJit),
     /// Backtracking JIT engine for patterns with backreferences.
     /// Uses PCRE-style backtracking for fast backreference matching.
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     Backtracking(jit::BacktrackingJit),
     /// JIT-compiled Shift-Or engine for word boundary patterns.
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     JitShiftOr(jit::JitShiftOr),
 }
 
@@ -105,13 +105,13 @@ impl CompiledRegex {
             CompiledInner::CodepointClass(_) => "CodepointClass",
             CompiledInner::BacktrackingVm(_) => "BacktrackingVm",
             CompiledInner::TaggedNfaInterp(_) => "TaggedNfa",
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::Jit(_) => "Jit",
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::TaggedNfaJit(_) => "TaggedNfaJit",
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::Backtracking(_) => "BacktrackingJit",
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::JitShiftOr(_) => "JitShiftOr",
         }
     }
@@ -158,13 +158,13 @@ impl CompiledRegex {
             CompiledInner::CodepointClass(matcher) => matcher.is_match(input),
             CompiledInner::BacktrackingVm(vm) => vm.find(input).is_some(),
             CompiledInner::TaggedNfaInterp(engine) => engine.is_match(input),
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::Jit(jit) => jit.is_match(input),
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::TaggedNfaJit(engine) => engine.is_match(input),
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::Backtracking(jit) => jit.is_match(input),
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::JitShiftOr(jit) => jit.find(input).is_some(),
         }
     }
@@ -253,13 +253,13 @@ impl CompiledRegex {
             CompiledInner::CodepointClass(matcher) => matcher.find(input),
             CompiledInner::BacktrackingVm(vm) => vm.find(input),
             CompiledInner::TaggedNfaInterp(engine) => engine.find(input),
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::Jit(jit) => jit.find(input),
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::TaggedNfaJit(engine) => engine.find(input),
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::Backtracking(jit) => jit.find(input),
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::JitShiftOr(jit) => jit.find(input),
         }
     }
@@ -283,17 +283,17 @@ impl CompiledRegex {
                 // TaggedNfa interpreter does single-pass capture extraction
                 engine.captures(input)
             }
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::TaggedNfaJit(engine) => {
                 // TaggedNfa JIT does single-pass capture extraction
                 engine.captures(input)
             }
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::Backtracking(jit) => {
                 // Backtracking JIT does single-pass capture extraction
                 jit.captures(input)
             }
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::Jit(_) => {
                 // Fast path: if we have BacktrackingVm, use it for single-pass capture extraction
                 if let Some(ref backtracking_vm) = self.backtracking_vm {
@@ -355,7 +355,7 @@ impl CompiledRegex {
                         caps
                     })
             }
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::JitShiftOr(_) => {
                 // Use BacktrackingJit for capture extraction if available
                 // This is the JIT equivalent of BacktrackingVm used by non-JIT ShiftOr
@@ -417,13 +417,13 @@ impl CompiledRegex {
             }
             CompiledInner::BacktrackingVm(vm) => vm.find_at(input, pos),
             CompiledInner::TaggedNfaInterp(engine) => engine.find_at(input, pos),
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::Jit(jit) => jit.find_at(input, pos),
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::TaggedNfaJit(engine) => engine.find_at(input, pos),
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::Backtracking(jit) => jit.find_at(input, pos),
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             CompiledInner::JitShiftOr(jit) => jit.try_match_at(input, pos),
         }
     }
@@ -487,7 +487,7 @@ pub fn compile(nfa: Nfa) -> Result<CompiledRegex> {
         capture_vm: RwLock::new(None),
         capture_ctx: RwLock::new(None),
         backtracking_vm: None,
-        #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+        #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
         backtracking_jit: None,
     })
 }
@@ -508,7 +508,7 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
             capture_vm: RwLock::new(None),
             capture_ctx: RwLock::new(None),
             backtracking_vm: None,
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             backtracking_jit: None,
         });
     }
@@ -529,7 +529,7 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
             capture_vm: RwLock::new(None),
             capture_ctx: RwLock::new(None),
             backtracking_vm: None,
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             backtracking_jit: None,
         });
     }
@@ -663,7 +663,7 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
         capture_vm: RwLock::new(None),
         capture_ctx: RwLock::new(None),
         backtracking_vm,
-        #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+        #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
         backtracking_jit: None,
     })
 }
@@ -686,7 +686,7 @@ pub fn compile_with_pikevm(hir: &Hir) -> Result<CompiledRegex> {
         capture_vm: RwLock::new(None),
         capture_ctx: RwLock::new(None),
         backtracking_vm: None,
-        #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+        #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
         backtracking_jit: None,
     })
 }
@@ -713,7 +713,7 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
             capture_vm: RwLock::new(None),
             capture_ctx: RwLock::new(None),
             backtracking_vm: None,
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             backtracking_jit: None,
         });
     }
@@ -721,7 +721,7 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
     // 1. Complex Unicode patterns with large unicode classes → TaggedNfa JIT
     // These patterns use CodepointClass instructions which DFA cannot handle.
     // Route them to TaggedNfa JIT which supports CodepointClass.
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     if hir.props.has_large_unicode_class {
         let literals = extract_literals(hir);
         let prefilter = Prefilter::from_literals(&literals);
@@ -757,7 +757,7 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
     }
 
     // Non-JIT: Large unicode classes go to TaggedNfa interpreter
-    #[cfg(not(all(feature = "jit", target_arch = "x86_64")))]
+    #[cfg(not(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64"))))]
     if hir.props.has_large_unicode_class {
         let literals = extract_literals(hir);
         let prefilter = Prefilter::from_literals(&literals);
@@ -775,7 +775,7 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
 
     // 2. Patterns with backreferences → Backtracking JIT (only way to handle backrefs)
     // Backtracking JIT is required for backreferences since DFA cannot handle them.
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     if hir.props.has_backrefs && !hir.props.has_lookaround {
         let literals = extract_literals(hir);
         let prefilter = Prefilter::from_literals(&literals);
@@ -788,7 +788,7 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
                     capture_vm: RwLock::new(None),
                     capture_ctx: RwLock::new(None),
                     backtracking_vm: None,
-                    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+                    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
                     backtracking_jit: None,
                 });
             }
@@ -808,7 +808,7 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
     // because DFA JIT is much faster. DFA JIT handles captures via two-pass:
     // 1. Fast DFA JIT for find()
     // 2. PikeVM on matched substring for captures() only when needed
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     if hir.props.has_lookaround || hir.props.has_non_greedy {
         let literals = extract_literals(hir);
         let prefilter = Prefilter::from_literals(&literals);
@@ -849,7 +849,7 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
 
     // Fall back to TaggedNfa interpreter when JIT feature is not available
     // Note: TaggedNfa interpreter is now always available (faster than PikeVm for lookaround)
-    #[cfg(not(all(feature = "jit", target_arch = "x86_64")))]
+    #[cfg(not(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64"))))]
     if hir.props.has_lookaround || hir.props.has_non_greedy {
         let literals = extract_literals(hir);
         let prefilter = Prefilter::from_literals(&literals);
@@ -866,7 +866,7 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
     }
 
     // For backrefs without JIT, fall back to PikeVM
-    #[cfg(not(all(feature = "jit", target_arch = "x86_64")))]
+    #[cfg(not(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64"))))]
     if hir.props.has_backrefs {
         return compile_with_pikevm(hir);
     }
@@ -875,7 +875,7 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
     // ShiftOr's bit-parallel algorithm is faster than DFA JIT for patterns with
     // many alternations and no common prefix (no effective prefilter).
     // DFA JIT excels when there's a good prefilter to skip non-matching positions.
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         use crate::vm::is_shift_or_compatible;
         let literals = extract_literals(hir);
@@ -928,7 +928,7 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
 
     // 4. Simple patterns with effective prefilter → DFA JIT
     // DFA JIT benefits from prefilter to quickly skip non-matching positions.
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         let literals = extract_literals(hir);
         let prefilter = Prefilter::from_literals(&literals);
@@ -1115,7 +1115,7 @@ mod tests {
     // TaggedNfa integration tests (backrefs, lookaround, non-greedy)
     // These patterns trigger the TaggedNfaEngine path when JIT is enabled
 
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     mod tagged_nfa_integration {
         use super::*;
         use crate::engine::compile_with_jit;

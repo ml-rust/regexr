@@ -311,7 +311,7 @@ impl<'a, 'h> Iterator for TeddyIter<'a, 'h> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_arch = "x86_64"))]
 mod tests {
     use super::*;
 

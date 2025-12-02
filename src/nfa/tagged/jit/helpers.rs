@@ -134,7 +134,7 @@ unsafe fn check_codepoint_class_impl(
 /// - Positive value: The length of the UTF-8 character that matched (1-4 bytes)
 /// - 0 or negative: No match (or position out of bounds)
 #[allow(dead_code)]
-#[cfg(target_os = "windows")]
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
 pub unsafe extern "win64" fn check_codepoint_class(
     input_ptr: *const u8,
     pos: usize,
@@ -145,8 +145,19 @@ pub unsafe extern "win64" fn check_codepoint_class(
 }
 
 #[allow(dead_code)]
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 pub unsafe extern "sysv64" fn check_codepoint_class(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    cpclass_ptr: *const CodepointClass,
+) -> i64 {
+    check_codepoint_class_impl(input_ptr, pos, input_len, cpclass_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn check_codepoint_class(
     input_ptr: *const u8,
     pos: usize,
     input_len: usize,
@@ -181,7 +192,7 @@ unsafe fn check_positive_lookahead_impl(
 
 /// Helper function callable from JIT code to evaluate a positive lookahead assertion.
 #[allow(dead_code)]
-#[cfg(target_os = "windows")]
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
 pub unsafe extern "win64" fn check_positive_lookahead(
     input_ptr: *const u8,
     pos: usize,
@@ -192,8 +203,19 @@ pub unsafe extern "win64" fn check_positive_lookahead(
 }
 
 #[allow(dead_code)]
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 pub unsafe extern "sysv64" fn check_positive_lookahead(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_positive_lookahead_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn check_positive_lookahead(
     input_ptr: *const u8,
     pos: usize,
     input_len: usize,
@@ -228,7 +250,7 @@ unsafe fn check_negative_lookahead_impl(
 
 /// Helper function callable from JIT code to evaluate a negative lookahead assertion.
 #[allow(dead_code)]
-#[cfg(target_os = "windows")]
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
 pub unsafe extern "win64" fn check_negative_lookahead(
     input_ptr: *const u8,
     pos: usize,
@@ -239,8 +261,19 @@ pub unsafe extern "win64" fn check_negative_lookahead(
 }
 
 #[allow(dead_code)]
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 pub unsafe extern "sysv64" fn check_negative_lookahead(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_negative_lookahead_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn check_negative_lookahead(
     input_ptr: *const u8,
     pos: usize,
     input_len: usize,
@@ -275,7 +308,7 @@ unsafe fn check_positive_lookbehind_impl(
 
 /// Helper function callable from JIT code to evaluate a positive lookbehind assertion.
 #[allow(dead_code)]
-#[cfg(target_os = "windows")]
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
 pub unsafe extern "win64" fn check_positive_lookbehind(
     input_ptr: *const u8,
     pos: usize,
@@ -286,8 +319,19 @@ pub unsafe extern "win64" fn check_positive_lookbehind(
 }
 
 #[allow(dead_code)]
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 pub unsafe extern "sysv64" fn check_positive_lookbehind(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_positive_lookbehind_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn check_positive_lookbehind(
     input_ptr: *const u8,
     pos: usize,
     input_len: usize,
@@ -322,7 +366,7 @@ unsafe fn check_negative_lookbehind_impl(
 
 /// Helper function callable from JIT code to evaluate a negative lookbehind assertion.
 #[allow(dead_code)]
-#[cfg(target_os = "windows")]
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
 pub unsafe extern "win64" fn check_negative_lookbehind(
     input_ptr: *const u8,
     pos: usize,
@@ -333,8 +377,19 @@ pub unsafe extern "win64" fn check_negative_lookbehind(
 }
 
 #[allow(dead_code)]
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 pub unsafe extern "sysv64" fn check_negative_lookbehind(
+    input_ptr: *const u8,
+    pos: usize,
+    input_len: usize,
+    nfa_ptr: *const Nfa,
+) -> i64 {
+    check_negative_lookbehind_impl(input_ptr, pos, input_len, nfa_ptr)
+}
+
+#[allow(dead_code)]
+#[cfg(target_arch = "aarch64")]
+pub unsafe extern "C" fn check_negative_lookbehind(
     input_ptr: *const u8,
     pos: usize,
     input_len: usize,

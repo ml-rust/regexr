@@ -6,7 +6,7 @@ use crate::hir::Hir;
 
 use super::{ShiftOr, ShiftOrInterpreter};
 
-#[cfg(all(feature = "jit", target_arch = "x86_64"))]
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 use super::jit::JitShiftOr;
 
 /// Shift-Or engine that automatically selects the best backend.
@@ -16,7 +16,7 @@ pub struct ShiftOrEngine {
     /// The compiled Shift-Or data structure.
     shift_or: ShiftOr,
     /// JIT-compiled version (if available).
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     jit: Option<JitShiftOr>,
 }
 
@@ -34,24 +34,24 @@ impl ShiftOrEngine {
     pub fn from_hir(hir: &Hir) -> Option<Self> {
         let shift_or = ShiftOr::from_hir(hir)?;
 
-        #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+        #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
         let jit = JitShiftOr::compile(&shift_or);
 
         Some(Self {
             shift_or,
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             jit,
         })
     }
 
     /// Creates a new Shift-Or engine from a pre-compiled ShiftOr.
     pub fn new(shift_or: ShiftOr) -> Self {
-        #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+        #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
         let jit = JitShiftOr::compile(&shift_or);
 
         Self {
             shift_or,
-            #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
             jit,
         }
     }
@@ -65,7 +65,7 @@ impl ShiftOrEngine {
     /// Finds the first match, returning (start, end).
     #[inline]
     pub fn find(&self, input: &[u8]) -> Option<(usize, usize)> {
-        #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+        #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
         if let Some(ref jit) = self.jit {
             return jit.find(input);
         }
@@ -76,7 +76,7 @@ impl ShiftOrEngine {
     /// Finds a match starting at or after the given position.
     #[inline]
     pub fn find_at(&self, input: &[u8], pos: usize) -> Option<(usize, usize)> {
-        #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+        #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
         if let Some(ref jit) = self.jit {
             return jit.find_at(input, pos);
         }
@@ -87,7 +87,7 @@ impl ShiftOrEngine {
     /// Tries to match at exactly the given position.
     #[inline]
     pub fn try_match_at(&self, input: &[u8], pos: usize) -> Option<(usize, usize)> {
-        #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+        #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
         if let Some(ref jit) = self.jit {
             return jit.try_match_at(input, pos);
         }
@@ -106,13 +106,13 @@ impl ShiftOrEngine {
     }
 
     /// Returns whether JIT is being used.
-    #[cfg(all(feature = "jit", target_arch = "x86_64"))]
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     pub fn is_jit(&self) -> bool {
         self.jit.is_some()
     }
 
     /// Returns whether JIT is being used (always false without JIT feature).
-    #[cfg(not(all(feature = "jit", target_arch = "x86_64")))]
+    #[cfg(not(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64"))))]
     pub fn is_jit(&self) -> bool {
         false
     }

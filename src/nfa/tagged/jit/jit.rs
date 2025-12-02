@@ -11,7 +11,12 @@ use crate::vm::{PikeVm, PikeVmContext};
 use super::super::{
     analyze_liveness, LookaroundCache, NfaLiveness, PatternStep, TaggedNfa, TaggedNfaContext,
 };
+
+#[cfg(target_arch = "x86_64")]
 use super::x86_64::TaggedNfaJitCompiler;
+
+#[cfg(target_arch = "aarch64")]
+use super::aarch64::TaggedNfaJitCompiler;
 
 use dynasmrt::ExecutableBuffer;
 
@@ -19,17 +24,25 @@ use dynasmrt::ExecutableBuffer;
 pub const JIT_USE_INTERPRETER: i64 = -2;
 
 // Platform-specific function pointer types for JIT code
-#[cfg(target_os = "windows")]
+// x86_64 Windows uses Microsoft x64 ABI
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
 type FindFn = unsafe extern "win64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64;
-#[cfg(target_os = "windows")]
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
 type CapturesFn =
     unsafe extern "win64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64;
 
-#[cfg(not(target_os = "windows"))]
+// x86_64 Unix uses System V AMD64 ABI
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 type FindFn = unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext) -> i64;
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 type CapturesFn =
     unsafe extern "sysv64" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64;
+
+// ARM64 uses AAPCS64 on all platforms (extern "C")
+#[cfg(target_arch = "aarch64")]
+type FindFn = unsafe extern "C" fn(*const u8, usize, *mut TaggedNfaContext) -> i64;
+#[cfg(target_arch = "aarch64")]
+type CapturesFn = unsafe extern "C" fn(*const u8, usize, *mut TaggedNfaContext, *mut i64) -> i64;
 
 /// A JIT-compiled Tagged NFA for single-pass capture extraction.
 pub struct TaggedNfaJit {

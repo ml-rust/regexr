@@ -207,7 +207,7 @@ pub unsafe fn all_ones() -> __m256i {
     _mm256_set1_epi8(-1)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_arch = "x86_64"))]
 mod tests {
     use super::*;
 
