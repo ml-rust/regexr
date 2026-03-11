@@ -6,7 +6,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/regexr.svg)](https://crates.io/crates/regexr)
 [![Documentation](https://docs.rs/regexr/badge.svg)](https://docs.rs/regexr)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
 ---
 

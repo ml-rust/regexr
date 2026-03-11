@@ -1,10 +1,10 @@
 [package]
 name = "regexr"
-version = "0.1.0-beta.5"
+version = "0.1.0"
 edition = "2021"
 authors = ["Farhan Syah"]
 description = "A high-performance regex engine built from scratch with JIT compilation and SIMD acceleration"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/ml-rust/regexr"
 keywords = ["regex", "jit", "simd", "pattern-matching"]
 categories = ["text-processing", "parsing"]
