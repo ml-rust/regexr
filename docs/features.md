@@ -332,15 +332,19 @@ let re = RegexBuilder::new(r"(function|for|finally|from)")
 ### How It Works
 
 Without optimization:
+
 ```
 (function|for|finally|from)
 ```
+
 Creates separate NFA branches for each alternative.
 
 With optimization:
+
 ```
 f(unction|or|inally|rom)
 ```
+
 Merges the common prefix `f`, reducing active NFA threads from O(vocabulary_size) to O(token_length).
 
 ### When to Use
@@ -435,6 +439,7 @@ match Regex::new(r"(unclosed") {
 ```
 
 Common errors:
+
 - Unclosed groups
 - Invalid escape sequences
 - Invalid repetition
@@ -507,30 +512,32 @@ Ensure the engine matches your expectations for the pattern type.
 ### Current Limitations
 
 1. **SIMD**: Only available on x86-64 with AVX2 support
-2. **Multiline mode**: Currently `.` never matches newline
-3. **Backreferences**: Cannot be combined with JIT DFA (uses BacktrackingJit instead)
-4. **Variable-width lookbehind**: Limited support (fixed-width lookbehind only)
+2. **JIT**: Not available on WASM — falls back to interpreted engines automatically
+3. **Multiline mode**: Currently `.` never matches newline
+4. **Backreferences**: Cannot be combined with JIT DFA (uses BacktrackingJit instead)
+5. **Variable-width lookbehind**: Limited support (fixed-width lookbehind only)
 
 ### Platform Support
 
-| Platform | JIT Support | SIMD Support |
-|----------|-------------|--------------|
-| Linux x86-64 | ✓ | ✓ (AVX2) |
-| Linux ARM64 | ✓ | ✗ |
-| macOS x86-64 | ✓ | ✓ (AVX2) |
-| macOS ARM64 (Apple Silicon) | ✓ | ✗ |
-| Windows x86-64 | ✓ | ✓ (AVX2) |
-| Other | ✗ | ✗ |
+| Platform                    | JIT Support | SIMD Support |
+| --------------------------- | ----------- | ------------ |
+| Linux x86-64                | ✓           | ✓ (AVX2)     |
+| Linux ARM64                 | ✓           | ✗            |
+| macOS x86-64                | ✓           | ✓ (AVX2)     |
+| macOS ARM64 (Apple Silicon) | ✓           | ✗            |
+| Windows x86-64              | ✓           | ✓ (AVX2)     |
+| WASM (wasm32)               | ✗           | ✗            |
+| Other                       | ✗           | ✗            |
 
 ### Feature Compatibility
 
-| Feature | PikeVm | ShiftOr | LazyDFA | JIT DFA | BacktrackingJit |
-|---------|--------|---------|---------|---------|-----------------|
-| Backreferences | ✓ | ✗ | ✗ | ✗ | ✓ |
-| Lookaround | ✓ | ✗ | ✗ | ✗ | ✗ |
-| Non-greedy | ✓ | ✗ | ✗ | ✗ | ✗ |
-| Word boundaries | ✓ | ✗ | ✓ | ✓ | ✓ |
-| Anchors | ✓ | ✗ | ✓ | ✓ | ✓ |
-| Captures | ✓ | ✓* | ✓* | ✓ | ✓ |
+| Feature         | PikeVm | ShiftOr | LazyDFA | JIT DFA | BacktrackingJit |
+| --------------- | ------ | ------- | ------- | ------- | --------------- |
+| Backreferences  | ✓      | ✗       | ✗       | ✗       | ✓               |
+| Lookaround      | ✓      | ✗       | ✗       | ✗       | ✗               |
+| Non-greedy      | ✓      | ✗       | ✗       | ✗       | ✗               |
+| Word boundaries | ✓      | ✗       | ✓       | ✓       | ✓               |
+| Anchors         | ✓      | ✗       | ✓       | ✓       | ✓               |
+| Captures        | ✓      | ✓\*     | ✓\*     | ✓       | ✓               |
 
-*ShiftOr and LazyDFA fall back to PikeVm for capture extraction.
+\*ShiftOr and LazyDFA fall back to PikeVm for capture extraction.

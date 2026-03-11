@@ -13,7 +13,7 @@ src/
 └── vm/           # Virtual machine engines (specialized matchers)
 ```
 
-**Note**: NFA (Nondeterministic Finite Automaton) is a data structure. Thompson's algorithm is one way to *construct* an NFA from a regex. The NFA can then be *executed* using various algorithms (PikeVM, tagged simulation, etc.).
+**Note**: NFA (Nondeterministic Finite Automaton) is a data structure. Thompson's algorithm is one way to _construct_ an NFA from a regex. The NFA can then be _executed_ using various algorithms (PikeVM, tagged simulation, etc.).
 
 The `src/jit/` module serves as a **re-export hub** only - it re-exports JIT types from their canonical locations for backwards compatibility.
 
@@ -41,13 +41,13 @@ src/{engine_type}/{engine_name}/
 
 Each engine may have additional files based on its needs. Examples:
 
-| Engine | Specific Files | Purpose |
-|--------|---------------|---------|
-| Tagged NFA | `liveness.rs` | Capture liveness analysis for sparse copying |
-| Tagged NFA | `steps.rs` | Pattern step extraction for fast matching |
-| Tagged NFA | `shared.rs` | ThreadWorklist, PatternStep types |
-| Lazy DFA | `cache.rs` | State cache management |
-| Shift-Or | `bitset.rs` | Bit manipulation utilities |
+| Engine     | Specific Files | Purpose                                      |
+| ---------- | -------------- | -------------------------------------------- |
+| Tagged NFA | `liveness.rs`  | Capture liveness analysis for sparse copying |
+| Tagged NFA | `steps.rs`     | Pattern step extraction for fast matching    |
+| Tagged NFA | `shared.rs`    | ThreadWorklist, PatternStep types            |
+| Lazy DFA   | `cache.rs`     | State cache management                       |
+| Shift-Or   | `bitset.rs`    | Bit manipulation utilities                   |
 
 **Don't force unnecessary files** - only create what the engine actually needs.
 
@@ -93,18 +93,21 @@ src/vm/shift_or/
 ## Feature Gating
 
 ### Always Available (no feature gate)
+
 - `shared.rs` - Data structures used by both interpreter and JIT
 - `liveness.rs` - Analysis passes
 - `engine.rs` - Engine facade
 - `interpreter/` - All interpreter implementations
 
 ### JIT-Gated
+
 ```rust
 #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub mod jit;
 ```
 
 ### Architecture-Specific JIT
+
 ```rust
 // In jit/mod.rs
 #[cfg(target_arch = "x86_64")]
@@ -124,6 +127,7 @@ pub use aarch64::compile;
 ## Module Responsibilities
 
 ### `mod.rs` (required)
+
 - Module coordination
 - Re-exports for public API
 - Feature-gated submodule inclusion
@@ -142,6 +146,7 @@ pub use engine::Engine;
 ```
 
 ### `engine.rs` (required)
+
 - Facade pattern - single entry point for executor.rs
 - Owns the NFA/DFA and selects between interpreter/JIT
 - Provides `is_match()`, `find()`, `captures()` methods
@@ -160,11 +165,13 @@ impl Engine {
 ```
 
 ### `interpreter/` (required)
+
 - Pure Rust implementations
 - No JIT dependencies
 - Multiple implementations allowed (e.g., StepInterpreter for fast path, full simulation for complex patterns)
 
 ### `jit/` (optional)
+
 - JIT compilation code
 - Architecture-specific backends in separate files (x86_64.rs, aarch64.rs)
 - Common JIT struct in `{name}.rs`
@@ -294,15 +301,15 @@ src/vm/
 
 ## Terminology
 
-| Term | Meaning |
-|------|---------|
-| **NFA** | Nondeterministic Finite Automaton - a data structure representing regex states |
-| **DFA** | Deterministic Finite Automaton - each state has exactly one transition per input |
-| **Thompson's Algorithm** | Algorithm to construct an NFA from a regex |
-| **PikeVM** | Algorithm to execute NFA with parallel thread simulation |
-| **Tagged NFA** | NFA execution with capture group tracking |
-| **Lazy DFA** | DFA that builds states on-demand during matching |
-| **Eager DFA** | DFA that precomputes all states before matching |
+| Term                     | Meaning                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| **NFA**                  | Nondeterministic Finite Automaton - a data structure representing regex states   |
+| **DFA**                  | Deterministic Finite Automaton - each state has exactly one transition per input |
+| **Thompson's Algorithm** | Algorithm to construct an NFA from a regex                                       |
+| **PikeVM**               | Algorithm to execute NFA with parallel thread simulation                         |
+| **Tagged NFA**           | NFA execution with capture group tracking                                        |
+| **Lazy DFA**             | DFA that builds states on-demand during matching                                 |
+| **Eager DFA**            | DFA that precomputes all states before matching                                  |
 
 ## Benefits of This Structure
 
@@ -313,22 +320,10 @@ src/vm/
 5. **Testability**: Each component can be tested independently
 6. **Documentation**: Structure is self-documenting
 
-## Migration Status
-
-Current engine migration progress:
-
-| Engine | Location | Status | Notes |
-|--------|----------|--------|-------|
-| Tagged NFA | `src/nfa/tagged/` | ✅ Migrated | Captures, lookaround, non-greedy |
-| Shift-Or | `src/vm/shift_or/` | ✅ Migrated | Bit-parallel matcher |
-| Backtracking | `src/vm/backtracking/` | ✅ Migrated | Backreference support |
-| PikeVM | `src/vm/pike/` | ✅ Migrated | Parallel NFA simulation, no JIT |
-| Lazy DFA | `src/dfa/lazy/` | ✅ Migrated | On-demand state construction |
-| Eager DFA | `src/dfa/eager/` | ✅ Migrated | Pre-computed states for fast matching |
-
-### Migrated Engines
+## Engine Layouts
 
 #### Shift-Or (`src/vm/shift_or/`)
+
 ```
 src/vm/shift_or/
 ├── mod.rs              # Module coordination, tests
@@ -340,10 +335,12 @@ src/vm/shift_or/
 └── jit/
     ├── mod.rs
     ├── jit.rs          # JitShiftOr struct and API
-    └── x86_64.rs       # x86-64 code generation
+    ├── x86_64.rs       # x86-64 code generation
+    └── aarch64.rs      # ARM64 code generation
 ```
 
 #### Backtracking (`src/vm/backtracking/`)
+
 ```
 src/vm/backtracking/
 ├── mod.rs              # Module coordination, tests
@@ -355,10 +352,12 @@ src/vm/backtracking/
 └── jit/
     ├── mod.rs
     ├── jit.rs          # BacktrackingJit struct and API
-    └── x86_64.rs       # x86-64 code generation
+    ├── x86_64.rs       # x86-64 code generation
+    └── aarch64.rs      # ARM64 code generation
 ```
 
 #### PikeVM (`src/vm/pike/`)
+
 ```
 src/vm/pike/
 ├── mod.rs              # Module coordination, tests
@@ -370,6 +369,7 @@ src/vm/pike/
 ```
 
 #### Lazy DFA (`src/dfa/lazy/`)
+
 ```
 src/dfa/lazy/
 ├── mod.rs              # Module coordination, tests
@@ -381,6 +381,7 @@ src/dfa/lazy/
 ```
 
 #### Eager DFA (`src/dfa/eager/`)
+
 ```
 src/dfa/eager/
 ├── mod.rs              # Module coordination, tests
@@ -390,19 +391,3 @@ src/dfa/eager/
     ├── mod.rs
     └── dfa.rs          # EagerDfa (no JIT backend currently)
 ```
-
-## Migration Checklist
-
-When migrating an existing engine to this structure:
-
-- [ ] Create the directory structure
-- [ ] Move shared types to `shared.rs`
-- [ ] Extract interpreter code to `interpreter/`
-- [ ] Extract JIT code to `jit/`
-- [ ] Create engine facade in `engine.rs`
-- [ ] Update `mod.rs` with proper re-exports
-- [ ] Update `src/jit/mod.rs` to re-export from new location
-- [ ] Delete old files from `src/jit/`
-- [ ] Update `src/engine/executor.rs` imports
-- [ ] Run full test suite
-- [ ] Update documentation

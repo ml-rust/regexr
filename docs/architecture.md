@@ -20,21 +20,25 @@ Pattern String → AST → HIR → NFA → Engine-Specific Representation
 ### 2. Key Types
 
 #### Public API (`src/lib.rs`)
+
 - `Regex`: Main public API for pattern matching
 - `RegexBuilder`: Builder for configuring compilation options
 - `Match`: Represents a single match in the input
 - `Captures`: Capture groups from a match
 
 #### Internal Representation (`src/engine/executor.rs`)
+
 - `CompiledRegex`: Internal compiled pattern with selected engine
 - `CompiledInner`: Enum of all possible execution engines
 
 #### Pattern Analysis (`src/hir/mod.rs`)
+
 - `Hir`: High-level intermediate representation
 - `HirProps`: Derived properties (backreferences, lookaround, anchors, etc.)
 - `HirExpr`: Expression nodes in the HIR tree
 
 #### State Machines
+
 - `Nfa` (`src/nfa/state.rs`): NFA state machine
 - `LazyDfa` (`src/dfa/lazy/`): On-demand DFA construction
 - `EagerDfa` (`src/dfa/eager/`): Pre-materialized DFA
@@ -44,35 +48,41 @@ Pattern String → AST → HIR → NFA → Engine-Specific Representation
 ### Non-JIT Engines (Interpreted)
 
 #### PikeVM (`src/vm/pike/`)
+
 - Thread-based NFA simulation
 - Required for patterns with lookaround
 - Supports all regex features including backreferences
 - Uses Thompson NFA construction with epsilon transitions
 
 #### ShiftOr (`src/vm/shift_or/`)
+
 - Bit-parallel NFA simulation using bitwise operations
 - Fast for small patterns (≤64 NFA states)
 - Cannot handle anchors or word boundaries
 - Excellent for simple alternations and character classes
 
 #### LazyDFA (`src/dfa/lazy/`)
+
 - Builds DFA states on-demand during matching
 - Caches states for reuse
 - Falls back to NFA simulation for complex patterns
 - Good general-purpose engine
 
 #### EagerDFA (`src/dfa/eager/`)
+
 - Pre-computes DFA states during compilation
 - Used for patterns with word boundaries or anchors
 - Faster startup than LazyDFA for bounded patterns
 
 #### BacktrackingVm (`src/vm/backtracking/`)
+
 - PCRE-style backtracking engine
 - Required for patterns with backreferences
 - Single-pass capture extraction
 - Non-JIT version of BacktrackingJit
 
 #### CodepointClassMatcher (`src/vm/codepoint_class.rs`)
+
 - Optimized for single Unicode character class patterns
 - Operates at codepoint level instead of byte level
 - Fast for patterns like `\p{Greek}` or `[α-ω]`
@@ -82,23 +92,27 @@ Pattern String → AST → HIR → NFA → Engine-Specific Representation
 Available on x86-64 (Linux, macOS, Windows) and ARM64 (Linux, macOS) with the `jit` feature.
 
 #### DFA JIT (`src/jit/`)
+
 - Compiles DFA to native machine code
 - Benefits from SIMD prefiltering for literal prefixes
 - Fast path for most patterns without backreferences or lookaround
 - Re-export hub in `src/jit/mod.rs`
 
 #### BacktrackingJit (`src/vm/backtracking/jit/`)
+
 - JIT-compiled backtracking engine
 - Required for patterns with backreferences
 - Uses native code for faster backtracking
 
 #### TaggedNfa (`src/nfa/tagged/jit/`)
+
 - JIT-compiled NFA with liveness analysis
 - Used for patterns with lookaround or non-greedy quantifiers
 - Efficient single-pass capture extraction
 - Preserves NFA match preference
 
 #### JitShiftOr (`src/vm/shift_or/jit/`)
+
 - JIT-compiled bit-parallel matcher
 - Optimized for patterns with alternations
 - Used when no effective prefilter is available
@@ -194,22 +208,22 @@ Several components use lazy initialization to avoid unnecessary allocations:
 - **PikeVm context**: Pre-allocated storage for NFA simulation
 - **LazyDFA states**: Built on-demand during matching
 
-### RefCell Usage
+### Interior Mutability
 
-`CompiledRegex` uses `RefCell` for interior mutability:
+`CompiledRegex` uses `RwLock` for thread-safe lazy initialization:
 
 ```rust
 pub struct CompiledRegex {
     inner: CompiledInner,
     prefilter: Prefilter,
-    capture_nfa: RefCell<Option<Nfa>>,
-    capture_vm: RefCell<Option<PikeVm>>,
-    capture_ctx: RefCell<Option<PikeVmContext>>,
+    capture_nfa: RwLock<Option<Nfa>>,
+    capture_vm: RwLock<Option<PikeVm>>,
+    capture_ctx: RwLock<Option<PikeVmContext>>,
     // ...
 }
 ```
 
-This allows lazy initialization without requiring `&mut self`, enabling the public API to use `&self` for all operations.
+This allows lazy initialization without requiring `&mut self`, enabling the public API to use `&self` for all operations. Because `RwLock` is `Sync`, compiled `Regex` objects can be safely shared across threads (e.g., via `Arc`, `OnceLock`, or `lazy_static!`). Multiple readers proceed concurrently; the write lock is only acquired once during lazy initialization.
 
 ## Unicode Support
 
