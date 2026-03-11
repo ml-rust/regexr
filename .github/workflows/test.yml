@@ -1,0 +1,156 @@
+# Reusable test workflow: lint, format, docs, cross-platform tests, feature checks.
+#
+# Called by:
+#   - ci.yml      (PR checks)
+#   - release.yml (pre-publish validation)
+#
+# Not triggered directly — use workflow_call only.
+
+name: Test
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint:
+    name: Lint, Format & Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: lint
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run clippy (all features)
+        run: cargo clippy --features full --all-targets -- -D warnings
+
+      - name: Build docs
+        run: cargo doc --features full --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      - name: Run doctests
+        run: cargo test --doc --features full
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: test
+
+      - name: Run tests (default features)
+        run: cargo test
+
+      - name: Run tests (all features)
+        run: cargo test --features full
+
+  feature-matrix:
+    name: Feature Compile & WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: feature-matrix
+
+      - name: "Compile: no default features (minimal)"
+        run: cargo check --no-default-features
+
+      - name: "Compile: simd only (default)"
+        run: cargo check
+
+      - name: "Compile: jit only"
+        run: cargo check --no-default-features --features jit
+
+      - name: "Compile: full"
+        run: cargo check --features full
+
+      - name: "Compile: WASM (no default features)"
+        run: cargo check --no-default-features --target wasm32-unknown-unknown
+
+      - name: "Test: no default features"
+        run: cargo test --no-default-features
+
+      - name: "Test: jit only"
+        run: cargo test --no-default-features --features jit
+
+  jit-platforms:
+    name: JIT (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+            features: jit
+          - name: macOS Intel
+            os: macos-15-intel
+            features: full
+          - name: macOS ARM64
+            os: macos-latest
+            features: jit
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: jit
+
+      - name: Check
+        run: cargo check --no-default-features --features ${{ matrix.features }}
+
+      - name: Test
+        run: cargo test --no-default-features --features ${{ matrix.features }}
+
+  msrv:
+    name: MSRV (1.83)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.83
+        uses: dtolnay/rust-toolchain@1.83
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: msrv
+
+      - name: Check MSRV (all features)
+        run: cargo check --features full
