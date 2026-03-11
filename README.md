@@ -2,7 +2,7 @@
 
 # regexr
 
-**A specialized, pure-Rust regex engine designed for LLM tokenization and complex pattern matching.**
+**A specialized Rust regex engine designed for LLM tokenization and complex pattern matching.**
 
 [![Crates.io](https://img.shields.io/crates/v/regexr.svg)](https://crates.io/crates/regexr)
 [![Documentation](https://docs.rs/regexr/badge.svg)](https://docs.rs/regexr)
@@ -24,14 +24,15 @@ The Rust ecosystem already has the excellent, battle-tested [**`regex`**](https:
 
 **Only use `regexr` if you specifically need:**
 
-1.  **Lookarounds:** You need features like `(?=...)`, `(?<=...)`, or `(?!\S)` without C dependencies.
+1.  **Lookarounds:** You need `(?=...)`, `(?<=...)`, or `(?!\S)` without a C build dependency.
     - _Why not `regex`?_ It intentionally omits lookarounds to guarantee linear time.
-    - _Why not `pcre2`?_ Requires C library and FFI.
-2.  **JIT Compilation in Pure Rust:** You want native code generation for hot patterns without C dependencies.
+    - _Why not `fancy-regex`?_ No JIT compilation.
+2.  **JIT Compilation:** You want native code generation for hot regex patterns.
     - _Why not `regex`/`fancy-regex`?_ Neither offers JIT compilation.
-    - _Why not `pcre2`?_ Requires C library and FFI.
-3.  **Pure Rust Dependency:** You need advanced features (Lookarounds, Backreferences) but cannot use `pcre2` due to unsafe C bindings or build complexity.
-4.  **Bounded Execution:** You want ReDoS protection that **memoizes** states (guaranteeing completion) rather than just **aborting** after a timeout (like `pcre2`).
+    - _Why not `pcre2`?_ Requires installing a system C library (libpcre2).
+3.  **No System Dependencies:** Just `cargo add regexr` — no C toolchain or system libraries required. All code (including JIT) compiles with `cargo build`.
+4.  **WASM Support:** Compiles to `wasm32-unknown-unknown` with `--no-default-features`. Same API and features across native and WASM targets — JIT/SIMD are disabled automatically, but lookarounds, backreferences, and ReDoS protection all work. No need to swap crates per platform.
+5.  **Bounded Execution:** ReDoS protection that **memoizes** states (guaranteeing completion) rather than just **aborting** after a timeout (like `pcre2`).
 
 ## The Problem Solved
 
@@ -39,9 +40,9 @@ Developers building LLM tokenizers (like GPT-4 or Llama 3) currently face a dile
 
 - **`regex` crate:** Fast, safe, but **lacks lookarounds** and **JIT compilation**.
 - **`fancy-regex`:** Supports lookarounds, but **lacks JIT compilation**.
-- **`pcre2`:** Supports everything including JIT, but introduces **unsafe C bindings** and external dependencies.
+- **`pcre2`:** Supports everything including JIT, but requires **system C library installation** and cross-compilation setup.
 
-**`regexr` bridges this gap.** It provides **Lookarounds + JIT compilation + Backreferences** while remaining **100% Pure Rust**.
+**`regexr` bridges this gap.** It provides **Lookarounds + JIT compilation + Backreferences** with no system dependencies — just `cargo add` and go.
 
 ## Installation
 
@@ -49,14 +50,14 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-regexr = "0.x"
+regexr = "*"
 ```
 
 For JIT compilation support:
 
 ```toml
 [dependencies]
-regexr = { version = "0.x", features = ["full"] }
+regexr = { version = "*", features = ["full"] }
 ```
 
 ## Usage
@@ -238,9 +239,9 @@ If you use `regexr` in your research, please cite:
 ```bibtex
 @software{regexr2025,
   author       = {Syah, Farhan},
-  title        = {regexr: A Pure-Rust Regex Engine with JIT Compilation for LLM Tokenization},
+  title        = {regexr: A Rust Regex Engine with JIT Compilation for LLM Tokenization},
   year         = {2025},
   url          = {https://github.com/ml-rust/regexr},
-  note         = {Pure-Rust regex engine with lookaround support and JIT compilation}
+  note         = {Rust regex engine with lookaround support and JIT compilation}
 }
 ```
