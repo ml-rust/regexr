@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Farhan Syah"]
 description = "A high-performance regex engine built from scratch with JIT compilation and SIMD acceleration"
 license = "MIT"
-repository = "https://github.com/farhan-syah/regexr"
+repository = "https://github.com/ml-rust/regexr"
 keywords = ["regex", "jit", "simd", "pattern-matching"]
 categories = ["text-processing", "parsing"]
 

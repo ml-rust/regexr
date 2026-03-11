@@ -10,17 +10,9 @@
 
 ---
 
-> ⚠️ **Experimental - API May Change**
+> Originally created as the regex backend for [**splintr**](https://github.com/ml-rust/splintr), an LLM tokenizer. Passes compliance tests for industry-standard tokenizer patterns (OpenAI's `cl100k_base`, Meta's Llama 3).
 >
-> This library was created as the regex backend for [**splintr**](https://github.com/farhan-syah/splintr), an LLM tokenizer. It is **highly experimental** and the API may change drastically between versions.
->
-> While it passes compliance tests for industry-standard tokenizer patterns (OpenAI's `cl100k_base`, Meta's Llama 3), it has **not been proven in production environments**.
->
-> **Recommended for:** Research, experimentation, tokenizer development, data preprocessing.
->
-> **Not recommended for:** Production systems requiring stability guarantees.
->
-> Please report issues on the [Issue Tracker](https://github.com/farhan-syah/regexr/issues).
+> Please report issues on the [Issue Tracker](https://github.com/ml-rust/regexr/issues).
 
 ---
 
@@ -168,19 +160,21 @@ assert_eq!(result, "abc NUM def NUM");
 
 ### Platform Support
 
-| Platform | JIT Support | SIMD Support |
-|----------|-------------|--------------|
-| Linux x86-64 | ✓ | ✓ (AVX2) |
-| Linux ARM64 | ✓ | ✗ |
-| macOS x86-64 | ✓ | ✓ (AVX2) |
-| macOS ARM64 (Apple Silicon) | ✓ | ✗ |
-| Windows x86-64 | ✓ | ✓ (AVX2) |
-| Other | ✗ | ✗ |
+| Platform                    | JIT Support | SIMD Support |
+| --------------------------- | ----------- | ------------ |
+| Linux x86-64                | ✓           | ✓ (AVX2)     |
+| Linux ARM64                 | ✓           | ✗            |
+| macOS x86-64                | ✓           | ✓ (AVX2)     |
+| macOS ARM64 (Apple Silicon) | ✓           | ✗            |
+| Windows x86-64              | ✓           | ✓ (AVX2)     |
+| WASM (wasm32)               | ✗           | ✗            |
+| Other                       | ✗           | ✗            |
 
-Build without default features for a minimal installation:
+Build without default features for a minimal installation (also works for WASM):
 
 ```bash
-cargo build --no-default-features
+cargo build --no-default-features                           # Minimal (PikeVM + LazyDFA only)
+cargo build --no-default-features --target wasm32-unknown-unknown  # WASM target
 ```
 
 Build with all optimizations:
@@ -246,7 +240,7 @@ If you use `regexr` in your research, please cite:
   author       = {Syah, Farhan},
   title        = {regexr: A Pure-Rust Regex Engine with JIT Compilation for LLM Tokenization},
   year         = {2025},
-  url          = {https://github.com/farhan-syah/regexr},
-  note         = {Experimental regex engine with lookaround support and JIT compilation}
+  url          = {https://github.com/ml-rust/regexr},
+  note         = {Pure-Rust regex engine with lookaround support and JIT compilation}
 }
 ```
