@@ -139,6 +139,34 @@ jobs:
       - name: Test
         run: cargo test --no-default-features --features ${{ matrix.features }}
 
+  cross-check:
+    name: Cross-check (x86_64 → aarch64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: cross-aarch64
+
+      - name: Install cross-compilation tools
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: "Cross-check: JIT (aarch64)"
+        run: cargo check --no-default-features --features jit --target aarch64-unknown-linux-gnu
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: "Cross-check: full (aarch64)"
+        run: cargo check --features full --target aarch64-unknown-linux-gnu
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
   msrv:
     name: MSRV (1.83)
     runs-on: ubuntu-latest
