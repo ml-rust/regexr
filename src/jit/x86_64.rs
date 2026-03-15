@@ -205,16 +205,19 @@ fn emit_prologue(
     {
         // Windows x64: RDI, RSI are callee-saved. Args come in RCX, RDX.
         dynasm!(asm
+            ; .arch x64
             ; push rdi
             ; push rsi
         );
         if has_word_boundary {
             dynasm!(asm
+                ; .arch x64
                 ; push r13
             );
         }
         // Move arguments: RCX -> R8 (temp for input ptr), RDX = len
         dynasm!(asm
+            ; .arch x64
             ; mov r8, rcx   // Save input ptr to r8
             ; lea rdx, [rcx + rdx]  // end = input + len (rdx was len)
             ; mov rsi, r8   // base = input ptr
@@ -229,10 +232,12 @@ fn emit_prologue(
         // Unix (System V AMD64): Args in RDI, RSI. Only R13 is callee-saved.
         if has_word_boundary {
             dynasm!(asm
+                ; .arch x64
                 ; push r13
             );
         }
         dynasm!(asm
+            ; .arch x64
             // Arguments: rdi = input ptr, rsi = len
             // Save original input pointer to r8 temporarily
             ; mov r8, rdi
@@ -254,6 +259,7 @@ fn emit_prologue(
     // r13 = 1 means Word (after a-zA-Z0-9_)
     if has_word_boundary {
         dynasm!(asm
+            ; .arch x64
             ; xor r13d, r13d  // r13 = 0 (NonWord at start of input)
         );
     }
@@ -262,6 +268,7 @@ fn emit_prologue(
     if let Some(restart) = restart_label {
         if emit_restart_label {
             dynasm!(asm
+                ; .arch x64
                 ; =>restart
             );
         }
@@ -273,11 +280,13 @@ fn emit_prologue(
         // Secondary entry point (Word prev_class) - this is called from Rust
         // for find_at with Word prev_class, so we need to set r13 = 1
         dynasm!(asm
+            ; .arch x64
             ; mov r13d, 1  // r13 = 1 (Word)
         );
     }
 
     dynasm!(asm
+        ; .arch x64
         // Jump to start state
         ; jmp =>*start_label
     );
@@ -317,6 +326,7 @@ fn emit_dispatch(
         })?;
 
     dynasm!(asm
+        ; .arch x64
         ; .align 16
         ; =>dispatch_label
         // Check r13: 0 = NonWord, 1 = Word
@@ -433,6 +443,7 @@ fn emit_state(
     // 16-byte alignment for optimal CPU instruction fetch
     // This is CRITICAL for performance - state labels are hot loop entries
     dynasm!(asm
+        ; .arch x64
         ; .align 16
         ; =>*state_label
     );
@@ -447,10 +458,12 @@ fn emit_state(
         // This is important: we save r10 BEFORE checking exhaustion, so that
         // even if we jump directly to match_return, r10 has the correct value.
         dynasm!(asm
+            ; .arch x64
             ; mov r10, rdi
         );
         // If this is a match state and input is exhausted, return success
         dynasm!(asm
+            ; .arch x64
             ; lea rax, [rsi + rdi]
             ; cmp rax, rdx
             ; jge >match_return
@@ -458,6 +471,7 @@ fn emit_state(
     } else {
         // If this is not a match state and input is exhausted, return failure
         dynasm!(asm
+            ; .arch x64
             ; lea rax, [rsi + rdi]
             ; cmp rax, rdx
             ; jge =>no_match_label
@@ -481,6 +495,7 @@ fn emit_state(
         // Load next byte: al = input[pos]
         // input[pos] = *(rsi + rdi)
         dynasm!(asm
+            ; .arch x64
             ; movzx eax, BYTE [rsi + rdi]
             ; inc rdi  // pos++
         );
@@ -500,6 +515,7 @@ fn emit_state(
     // by jumping to no_match_label (which checks r10 and packs the result)
     if state.is_match {
         dynasm!(asm
+            ; .arch x64
             ; match_return:
             // r10 already has the match end position, r11 has the start
             // Jump to no_match_label to pack and return the result
@@ -549,6 +565,7 @@ fn emit_fast_forward_loop(
 
         // Emit bitmap as data (32 bytes aligned)
         dynasm!(asm
+            ; .arch x64
             ; jmp >fast_forward_start
             ; .align 32
             ; bitmap_data:
@@ -558,11 +575,13 @@ fn emit_fast_forward_loop(
 
         // Get the bitmap address into r9 (r11 is used for search start position)
         dynasm!(asm
+            ; .arch x64
             ; lea r9, [<bitmap_data]
         );
 
         // Fast-forward loop using bitmap lookup
         dynasm!(asm
+            ; .arch x64
             ; fast_forward_loop:
             // Check bounds
             ; lea rax, [rsi + rdi]
@@ -592,16 +611,19 @@ fn emit_fast_forward_loop(
         // If this is a match state, save the position
         if state.is_match {
             dynasm!(asm
+                ; .arch x64
                 ; mov r10, rdi
             );
         }
 
         dynasm!(asm
+            ; .arch x64
             ; jmp <fast_forward_loop
         );
     } else {
         // Use range checks for small number of ranges (original algorithm)
         dynasm!(asm
+            ; .arch x64
             ; fast_forward_loop:
             // Check bounds
             ; lea rax, [rsi + rdi]
@@ -619,12 +641,14 @@ fn emit_fast_forward_loop(
             if start == end {
                 // Single byte
                 dynasm!(asm
+                    ; .arch x64
                     ; cmp al, BYTE start as _
                     ; je >consume_byte
                 );
             } else {
                 // Byte range
                 dynasm!(asm
+                    ; .arch x64
                     ; cmp al, BYTE start as _
                     ; jb >next_range
                     ; cmp al, BYTE end as _
@@ -636,6 +660,7 @@ fn emit_fast_forward_loop(
             if is_last {
                 // No more ranges - byte doesn't match self-loop
                 dynasm!(asm
+                    ; .arch x64
                     ; jmp >check_other_transitions
                 );
             }
@@ -643,6 +668,7 @@ fn emit_fast_forward_loop(
 
         // Consume byte and continue loop
         dynasm!(asm
+            ; .arch x64
             ; consume_byte:
             ; inc rdi
         );
@@ -650,11 +676,13 @@ fn emit_fast_forward_loop(
         // If this is a match state, save the position
         if state.is_match {
             dynasm!(asm
+                ; .arch x64
                 ; mov r10, rdi
             );
         }
 
         dynasm!(asm
+            ; .arch x64
             ; jmp <fast_forward_loop
         );
     }
@@ -663,6 +691,7 @@ fn emit_fast_forward_loop(
     // For match states, the position is already saved in r10, so jump to no_match_label
     // which will pack and return the result. For non-match states, this is a failure.
     dynasm!(asm
+        ; .arch x64
         ; exhausted:
     );
 
@@ -670,10 +699,12 @@ fn emit_fast_forward_loop(
     // so we can return via no_match_label which will check r10 and return the match.
     // If it's not a match state, we go to no_match_label anyway (r10 will be -1).
     dynasm!(asm
+        ; .arch x64
         ; jmp =>no_match_label
     );
 
     dynasm!(asm
+        ; .arch x64
         ; check_other_transitions:
     );
 
@@ -683,6 +714,7 @@ fn emit_fast_forward_loop(
     if !other_transitions.is_empty() {
         // Reload the byte and consume it
         dynasm!(asm
+            ; .arch x64
             ; movzx eax, BYTE [rsi + rdi]
             ; inc rdi
         );
@@ -700,11 +732,13 @@ fn emit_fast_forward_loop(
 
             if start == end {
                 dynasm!(asm
+                    ; .arch x64
                     ; cmp al, BYTE start as _
                     ; je =>*target_label
                 );
             } else {
                 dynasm!(asm
+                    ; .arch x64
                     ; cmp al, BYTE start as _
                     ; jb >next_other
                     ; cmp al, BYTE end as _
@@ -717,6 +751,7 @@ fn emit_fast_forward_loop(
 
     // No transition matched
     dynasm!(asm
+        ; .arch x64
         ; jmp =>dead_label
     );
 
@@ -751,12 +786,14 @@ fn emit_sparse_transitions(
         if start == end {
             // Single byte
             dynasm!(asm
+                ; .arch x64
                 ; cmp al, BYTE start as _
                 ; je =>*target_label
             );
         } else {
             // Range of bytes
             dynasm!(asm
+                ; .arch x64
                 ; cmp al, BYTE start as _
                 ; jb >next_check
                 ; cmp al, BYTE end as _
@@ -768,6 +805,7 @@ fn emit_sparse_transitions(
 
     // If no transition matched, go to dead state
     dynasm!(asm
+        ; .arch x64
         ; jmp =>dead_label
     );
 
@@ -805,12 +843,14 @@ fn emit_dense_transitions(
         if start == end {
             // Single byte
             dynasm!(asm
+                ; .arch x64
                 ; cmp al, BYTE start as _
                 ; je =>*target_label
             );
         } else {
             // Range of bytes - use unsigned comparisons (jb/jbe are unsigned)
             dynasm!(asm
+                ; .arch x64
                 ; cmp al, BYTE start as _
                 ; jb >next
                 ; cmp al, BYTE end as _
@@ -822,6 +862,7 @@ fn emit_dense_transitions(
 
     // If no range matched, go to dead state
     dynasm!(asm
+        ; .arch x64
         ; jmp =>dead_label
     );
 
@@ -886,6 +927,7 @@ fn emit_dead_state(
     has_word_boundary: bool,
 ) -> Result<()> {
     dynasm!(asm
+        ; .arch x64
         ; .align 16
         ; =>dead_label
     );
@@ -894,6 +936,7 @@ fn emit_dead_state(
         // Unanchored: increment r11 (search start) and try again
         // First check if we already have a match saved
         dynasm!(asm
+            ; .arch x64
             ; cmp r10, 0
             ; jge =>no_match_label  // If we have a saved match, return it
             // No match yet - advance search position
@@ -912,6 +955,7 @@ fn emit_dead_state(
                 // Load the byte at position (r11 - 1) = the byte we just passed
                 // Note: r11 was already incremented, so r11-1 is valid
                 dynasm!(asm
+                    ; .arch x64
                     ; lea rax, [r11 - 1]      // rax = r11 - 1 (index of prev byte)
                     ; movzx eax, BYTE [rsi + rax]  // Load byte at base + (r11-1)
 
@@ -953,18 +997,21 @@ fn emit_dead_state(
             } else {
                 // Word boundary but no dispatch (shouldn't happen, but handle gracefully)
                 dynasm!(asm
+                    ; .arch x64
                     ; jmp =>restart
                 );
             }
         } else {
             // Non-word-boundary pattern: just restart
             dynasm!(asm
+                ; .arch x64
                 ; jmp =>restart
             );
         }
     } else {
         // Anchored: no retry, just go to no_match
         dynasm!(asm
+            ; .arch x64
             ; jmp =>no_match_label
         );
     }
@@ -990,6 +1037,7 @@ fn emit_no_match(
     has_word_boundary: bool,
 ) -> Result<()> {
     dynasm!(asm
+        ; .arch x64
         ; =>no_match_label
         // Check if we have a saved match position in r10
         ; cmp r10, 0
@@ -1005,9 +1053,10 @@ fn emit_no_match(
     #[cfg(target_os = "windows")]
     {
         if has_word_boundary {
-            dynasm!(asm ; pop r13);
+            dynasm!(asm ; .arch x64 ; pop r13);
         }
         dynasm!(asm
+            ; .arch x64
             ; pop rsi
             ; pop rdi
         );
@@ -1015,11 +1064,12 @@ fn emit_no_match(
     #[cfg(not(target_os = "windows"))]
     {
         if has_word_boundary {
-            dynasm!(asm ; pop r13);
+            dynasm!(asm ; .arch x64 ; pop r13);
         }
     }
 
     dynasm!(asm
+        ; .arch x64
         ; ret
         ; truly_no_match:
         // No match at all
@@ -1030,9 +1080,10 @@ fn emit_no_match(
     #[cfg(target_os = "windows")]
     {
         if has_word_boundary {
-            dynasm!(asm ; pop r13);
+            dynasm!(asm ; .arch x64 ; pop r13);
         }
         dynasm!(asm
+            ; .arch x64
             ; pop rsi
             ; pop rdi
         );
@@ -1040,11 +1091,12 @@ fn emit_no_match(
     #[cfg(not(target_os = "windows"))]
     {
         if has_word_boundary {
-            dynasm!(asm ; pop r13);
+            dynasm!(asm ; .arch x64 ; pop r13);
         }
     }
 
     dynasm!(asm
+        ; .arch x64
         ; ret
     );
 

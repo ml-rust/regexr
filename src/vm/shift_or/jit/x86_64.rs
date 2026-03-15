@@ -125,6 +125,7 @@ impl ShiftOrJitCompiler {
         );
 
         dynasm!(ops
+            ; .arch x64
             // Initialize - match state on stack (less frequently accessed)
             ; xor r10d, r10d         // r10 = start position = 0
             ; mov QWORD [rsp+16], -1 // last_match_end = -1
@@ -256,6 +257,7 @@ impl ShiftOrJitCompiler {
         // Platform-specific epilogue
         #[cfg(target_os = "windows")]
         dynasm!(ops
+            ; .arch x64
             ; pop rsi
             ; pop rdi
             ; ret
@@ -263,6 +265,7 @@ impl ShiftOrJitCompiler {
 
         #[cfg(not(target_os = "windows"))]
         dynasm!(ops
+            ; .arch x64
             ; ret
         );
 

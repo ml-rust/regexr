@@ -160,6 +160,7 @@ impl TaggedNfaJitCompiler {
 
         // find_fn: Returns -2 to trigger interpreter fallback
         dynasm!(self.asm
+            ; .arch x64
             ; mov rax, -2i32
             ; ret
         );
@@ -168,6 +169,7 @@ impl TaggedNfaJitCompiler {
 
         // captures_fn: Returns -2 to trigger interpreter fallback
         dynasm!(self.asm
+            ; .arch x64
             ; mov rax, -2i32
             ; ret
         );
@@ -314,6 +316,7 @@ impl TaggedNfaJitCompiler {
         // If pattern has backrefs, find_fn falls back to interpreter (backrefs need captures)
         if has_backrefs {
             dynasm!(self.asm
+                ; .arch x64
                 ; mov rax, -2i32   // JIT_USE_INTERPRETER
                 ; ret
             );
@@ -327,6 +330,7 @@ impl TaggedNfaJitCompiler {
         // Prologue - save callee-saved registers
         #[cfg(target_os = "windows")]
         dynasm!(self.asm
+            ; .arch x64
             ; push rdi          // Callee-saved on Windows
             ; push rsi          // Callee-saved on Windows
             ; push rbx
@@ -341,6 +345,7 @@ impl TaggedNfaJitCompiler {
 
         #[cfg(not(target_os = "windows"))]
         dynasm!(self.asm
+            ; .arch x64
             ; push rbx
             ; push r12
             ; push r13
@@ -351,6 +356,7 @@ impl TaggedNfaJitCompiler {
         // Set up registers
         // rdi = input_ptr, rsi = input_len (after platform-specific setup)
         dynasm!(self.asm
+            ; .arch x64
             ; mov rbx, rdi      // rbx = input_ptr
             ; mov r12, rsi      // r12 = input_len
             ; xor r13d, r13d    // r13 = start_pos = 0
@@ -363,6 +369,7 @@ impl TaggedNfaJitCompiler {
         let byte_mismatch = self.asm.new_dynamic_label();
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>start_loop
             // Check if enough bytes remain for minimum pattern length
             ; mov rax, r12
@@ -373,6 +380,7 @@ impl TaggedNfaJitCompiler {
 
         // r14 = current absolute position (starts at start_pos)
         dynasm!(self.asm
+            ; .arch x64
             ; mov r14, r13              // r14 = start_pos (current position)
         );
 
@@ -382,6 +390,7 @@ impl TaggedNfaJitCompiler {
                 PatternStep::Byte(byte) => {
                     // Check bounds
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jge =>byte_mismatch
                         ; movzx eax, BYTE [rbx + r14]
@@ -393,12 +402,14 @@ impl TaggedNfaJitCompiler {
                 PatternStep::ByteClass(byte_class) => {
                     // Check bounds
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jge =>byte_mismatch
                         ; movzx eax, BYTE [rbx + r14]
                     );
                     self.emit_range_check(&byte_class.ranges, byte_mismatch)?;
                     dynasm!(self.asm
+                        ; .arch x64
                         ; inc r14                   // Advance position
                     );
                 }
@@ -423,12 +434,14 @@ impl TaggedNfaJitCompiler {
 
                         // First iteration (must match)
                         dynasm!(self.asm
+                            ; .arch x64
                             ; cmp r14, r12
                             ; jge =>byte_mismatch       // Must have at least one byte
                             ; movzx eax, BYTE [rbx + r14]
                         );
                         self.emit_range_check(&byte_class.ranges, byte_mismatch)?;
                         dynasm!(self.asm
+                            ; .arch x64
                             ; inc r14                   // Consumed first byte
 
                             // Loop for additional matches
@@ -439,6 +452,7 @@ impl TaggedNfaJitCompiler {
                         );
                         self.emit_range_check(&byte_class.ranges, loop_done)?;
                         dynasm!(self.asm
+                            ; .arch x64
                             ; inc r14                   // Consumed another byte
                             ; jmp =>loop_start
                             ; =>loop_done
@@ -464,6 +478,7 @@ impl TaggedNfaJitCompiler {
                         let loop_done = self.asm.new_dynamic_label();
 
                         dynasm!(self.asm
+                            ; .arch x64
                             ; =>loop_start
                             ; cmp r14, r12
                             ; jge =>loop_done           // End of input - done looping
@@ -471,6 +486,7 @@ impl TaggedNfaJitCompiler {
                         );
                         self.emit_range_check(&byte_class.ranges, loop_done)?;
                         dynasm!(self.asm
+                            ; .arch x64
                             ; inc r14                   // Consumed a byte
                             ; jmp =>loop_start
                             ; =>loop_done
@@ -486,12 +502,14 @@ impl TaggedNfaJitCompiler {
 
                     // Must match at least one
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jge =>byte_mismatch       // Must have at least one byte
                         ; movzx eax, BYTE [rbx + r14]
                     );
                     self.emit_range_check(&byte_class.ranges, byte_mismatch)?;
                     dynasm!(self.asm
+                        ; .arch x64
                         ; inc r14                   // Consumed first byte
 
                         ; =>try_suffix
@@ -502,6 +520,7 @@ impl TaggedNfaJitCompiler {
 
                     // Suffix matched - continue
                     dynasm!(self.asm
+                        ; .arch x64
                         ; jmp =>suffix_matched
 
                         ; =>consume_more
@@ -512,6 +531,7 @@ impl TaggedNfaJitCompiler {
                     );
                     self.emit_range_check(&byte_class.ranges, byte_mismatch)?;
                     dynasm!(self.asm
+                        ; .arch x64
                         ; inc r14                   // Consumed another byte
                         ; jmp =>try_suffix
 
@@ -526,6 +546,7 @@ impl TaggedNfaJitCompiler {
                     let suffix_matched = self.asm.new_dynamic_label();
 
                     dynasm!(self.asm
+                        ; .arch x64
                         ; =>try_suffix
                     );
 
@@ -534,6 +555,7 @@ impl TaggedNfaJitCompiler {
 
                     // Suffix matched - continue
                     dynasm!(self.asm
+                        ; .arch x64
                         ; jmp =>suffix_matched
 
                         ; =>consume_more
@@ -544,6 +566,7 @@ impl TaggedNfaJitCompiler {
                     );
                     self.emit_range_check(&byte_class.ranges, byte_mismatch)?;
                     dynasm!(self.asm
+                        ; .arch x64
                         ; inc r14                   // Consumed another byte
                         ; jmp =>try_suffix
 
@@ -607,6 +630,7 @@ impl TaggedNfaJitCompiler {
                 PatternStep::StartOfText => {
                     // Start of text: only matches at position 0
                     dynasm!(self.asm
+                        ; .arch x64
                         ; test r14, r14
                         ; jnz =>byte_mismatch
                     );
@@ -614,6 +638,7 @@ impl TaggedNfaJitCompiler {
                 PatternStep::EndOfText => {
                     // End of text: only matches at position == input_len
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jne =>byte_mismatch
                     );
@@ -622,6 +647,7 @@ impl TaggedNfaJitCompiler {
                     // Start of line: matches at position 0 OR after a newline
                     let at_start = self.asm.new_dynamic_label();
                     dynasm!(self.asm
+                        ; .arch x64
                         ; test r14, r14
                         ; jz =>at_start
                         ; mov rax, r14
@@ -636,6 +662,7 @@ impl TaggedNfaJitCompiler {
                     // End of line: matches at position == input_len OR before a newline
                     let at_end = self.asm.new_dynamic_label();
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; je =>at_end
                         ; movzx eax, BYTE [rbx + r14]
@@ -680,6 +707,7 @@ impl TaggedNfaJitCompiler {
 
                     // Save current position to r15
                     dynasm!(self.asm
+                        ; .arch x64
                         ; mov r15, r14              // r15 = saved position
                     );
 
@@ -697,6 +725,7 @@ impl TaggedNfaJitCompiler {
                             match alt_step {
                                 PatternStep::Byte(byte) => {
                                     dynasm!(self.asm
+                                        ; .arch x64
                                         ; cmp r14, r12
                                         ; jge =>try_next_alt
                                         ; movzx eax, BYTE [rbx + r14]
@@ -707,12 +736,14 @@ impl TaggedNfaJitCompiler {
                                 }
                                 PatternStep::ByteClass(byte_class) => {
                                     dynasm!(self.asm
+                                        ; .arch x64
                                         ; cmp r14, r12
                                         ; jge =>try_next_alt
                                         ; movzx eax, BYTE [rbx + r14]
                                     );
                                     self.emit_range_check(&byte_class.ranges, try_next_alt)?;
                                     dynasm!(self.asm
+                                        ; .arch x64
                                         ; inc r14
                                     );
                                 }
@@ -721,12 +752,14 @@ impl TaggedNfaJitCompiler {
                                     let loop_done = self.asm.new_dynamic_label();
 
                                     dynasm!(self.asm
+                                        ; .arch x64
                                         ; cmp r14, r12
                                         ; jge =>try_next_alt
                                         ; movzx eax, BYTE [rbx + r14]
                                     );
                                     self.emit_range_check(&byte_class.ranges, try_next_alt)?;
                                     dynasm!(self.asm
+                                        ; .arch x64
                                         ; inc r14
                                         ; =>loop_start
                                         ; cmp r14, r12
@@ -735,6 +768,7 @@ impl TaggedNfaJitCompiler {
                                     );
                                     self.emit_range_check(&byte_class.ranges, loop_done)?;
                                     dynasm!(self.asm
+                                        ; .arch x64
                                         ; inc r14
                                         ; jmp =>loop_start
                                         ; =>loop_done
@@ -745,6 +779,7 @@ impl TaggedNfaJitCompiler {
                                     let loop_done = self.asm.new_dynamic_label();
 
                                     dynasm!(self.asm
+                                        ; .arch x64
                                         ; =>loop_start
                                         ; cmp r14, r12
                                         ; jge =>loop_done
@@ -752,6 +787,7 @@ impl TaggedNfaJitCompiler {
                                     );
                                     self.emit_range_check(&byte_class.ranges, loop_done)?;
                                     dynasm!(self.asm
+                                        ; .arch x64
                                         ; inc r14
                                         ; jmp =>loop_start
                                         ; =>loop_done
@@ -783,6 +819,7 @@ impl TaggedNfaJitCompiler {
                                 PatternStep::StartOfText => {
                                     // Start of text anchor in alternation
                                     dynasm!(self.asm
+                                        ; .arch x64
                                         ; test r14, r14         // r14 == 0?
                                         ; jnz =>try_next_alt    // Fail if not at start
                                     );
@@ -790,6 +827,7 @@ impl TaggedNfaJitCompiler {
                                 PatternStep::EndOfText => {
                                     // End of text anchor in alternation
                                     dynasm!(self.asm
+                                        ; .arch x64
                                         ; cmp r14, r12          // r14 == input_len?
                                         ; jne =>try_next_alt    // Fail if not at end
                                     );
@@ -798,6 +836,7 @@ impl TaggedNfaJitCompiler {
                                     // Start of line anchor in alternation
                                     let at_start = self.asm.new_dynamic_label();
                                     dynasm!(self.asm
+                                        ; .arch x64
                                         ; test r14, r14         // r14 == 0?
                                         ; jz =>at_start         // At start of text, it's start of line
                                         // Check if previous byte is newline
@@ -813,6 +852,7 @@ impl TaggedNfaJitCompiler {
                                     // End of line anchor in alternation
                                     let at_end = self.asm.new_dynamic_label();
                                     dynasm!(self.asm
+                                        ; .arch x64
                                         ; cmp r14, r12          // r14 == input_len?
                                         ; je =>at_end           // At end of text, it's end of line
                                         // Check if current byte is newline
@@ -869,12 +909,14 @@ impl TaggedNfaJitCompiler {
 
                         // This alternative succeeded - jump past remaining alternatives
                         dynasm!(self.asm
+                            ; .arch x64
                             ; jmp =>alt_success
                         );
 
                         // Label for trying next alternative (restore position first)
                         if !is_last {
                             dynasm!(self.asm
+                                ; .arch x64
                                 ; =>try_next_alt
                                 ; mov r14, r15         // Restore position
                             );
@@ -883,6 +925,7 @@ impl TaggedNfaJitCompiler {
 
                     // All alternatives tried and one succeeded
                     dynasm!(self.asm
+                        ; .arch x64
                         ; =>alt_success
                     );
                 }
@@ -891,11 +934,13 @@ impl TaggedNfaJitCompiler {
 
         // All steps matched! r14 = end position
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>match_found
         );
 
         // Byte mismatch - try next position
         dynasm!(self.asm
+            ; .arch x64
             ; =>byte_mismatch
             ; inc r13                   // start_pos++
             ; jmp =>start_loop
@@ -904,6 +949,7 @@ impl TaggedNfaJitCompiler {
         // Match found - return (start << 32 | end)
         // r13 = start position, r14 = end position
         dynasm!(self.asm
+            ; .arch x64
             ; =>match_found
             ; mov rax, r13
             ; shl rax, 32               // rax = start << 32
@@ -913,6 +959,7 @@ impl TaggedNfaJitCompiler {
         // Epilogue - restore callee-saved registers
         #[cfg(target_os = "windows")]
         dynasm!(self.asm
+            ; .arch x64
             ; pop r15
             ; pop r14
             ; pop r13
@@ -924,6 +971,7 @@ impl TaggedNfaJitCompiler {
         );
         #[cfg(not(target_os = "windows"))]
         dynasm!(self.asm
+            ; .arch x64
             ; pop r15
             ; pop r14
             ; pop r13
@@ -934,6 +982,7 @@ impl TaggedNfaJitCompiler {
 
         // No match
         dynasm!(self.asm
+            ; .arch x64
             ; =>no_match
             ; mov rax, -1i32
         );
@@ -941,6 +990,7 @@ impl TaggedNfaJitCompiler {
         // Epilogue - restore callee-saved registers
         #[cfg(target_os = "windows")]
         dynasm!(self.asm
+            ; .arch x64
             ; pop r15
             ; pop r14
             ; pop r13
@@ -952,6 +1002,7 @@ impl TaggedNfaJitCompiler {
         );
         #[cfg(not(target_os = "windows"))]
         dynasm!(self.asm
+            ; .arch x64
             ; pop r15
             ; pop r14
             ; pop r13
@@ -975,6 +1026,7 @@ impl TaggedNfaJitCompiler {
             // No captures in pattern - fall back to interpreter for captures
             let offset = self.asm.offset();
             dynasm!(self.asm
+                ; .arch x64
                 ; mov rax, -2i32
                 ; ret
             );
@@ -999,6 +1051,7 @@ impl TaggedNfaJitCompiler {
             let range = &ranges[0];
             let range_size = range.end.wrapping_sub(range.start);
             dynasm!(self.asm
+                ; .arch x64
                 ; sub al, range.start as i8
                 ; cmp al, range_size as i8
                 ; ja =>fail_label
@@ -1012,6 +1065,7 @@ impl TaggedNfaJitCompiler {
 
                 if is_last {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; mov cl, al
                         ; sub cl, range.start as i8
                         ; cmp cl, range_size as i8
@@ -1019,6 +1073,7 @@ impl TaggedNfaJitCompiler {
                     );
                 } else {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; mov cl, al
                         ; sub cl, range.start as i8
                         ; cmp cl, range_size as i8
@@ -1028,6 +1083,7 @@ impl TaggedNfaJitCompiler {
             }
 
             dynasm!(self.asm
+                ; .arch x64
                 ; =>range_matched
             );
         }
@@ -1054,6 +1110,7 @@ impl TaggedNfaJitCompiler {
         if alternatives.is_empty() {
             // Empty alternation - always fails
             dynasm!(self.asm
+                ; .arch x64
                 ; jmp =>fail_label
             );
             return Ok(());
@@ -1071,6 +1128,7 @@ impl TaggedNfaJitCompiler {
 
         // Save current position on stack
         dynasm!(self.asm
+            ; .arch x64
             ; push r14                 // Save current position
         );
 
@@ -1088,30 +1146,35 @@ impl TaggedNfaJitCompiler {
 
             // This alternative succeeded
             dynasm!(self.asm
+                ; .arch x64
                 ; add rsp, 8           // Pop saved position
                 ; jmp =>alt_success
             );
 
             // Define label for trying next alternative
             dynasm!(self.asm
+                ; .arch x64
                 ; =>try_next_alt
             );
 
             if is_last {
                 // Cleanup and jump to outer fail
                 dynasm!(self.asm
+                    ; .arch x64
                     ; add rsp, 8       // Pop saved position
                     ; jmp =>fail_label
                 );
             } else {
                 // Restore position and try next alternative
                 dynasm!(self.asm
+                    ; .arch x64
                     ; mov r14, [rsp]   // Restore position (keep on stack for next alt)
                 );
             }
         }
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>alt_success
         );
 
@@ -1130,6 +1193,7 @@ impl TaggedNfaJitCompiler {
         match step {
             PatternStep::Byte(byte) => {
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
@@ -1140,12 +1204,14 @@ impl TaggedNfaJitCompiler {
             }
             PatternStep::ByteClass(byte_class) => {
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
                 self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                 );
             }
@@ -1154,12 +1220,14 @@ impl TaggedNfaJitCompiler {
                 let loop_done = self.asm.new_dynamic_label();
 
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
                 self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                     ; =>loop_start
                     ; cmp r14, r12
@@ -1168,6 +1236,7 @@ impl TaggedNfaJitCompiler {
                 );
                 self.emit_range_check(&byte_class.ranges, loop_done)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                     ; jmp =>loop_start
                     ; =>loop_done
@@ -1178,6 +1247,7 @@ impl TaggedNfaJitCompiler {
                 let loop_done = self.asm.new_dynamic_label();
 
                 dynasm!(self.asm
+                    ; .arch x64
                     ; =>loop_start
                     ; cmp r14, r12
                     ; jge =>loop_done
@@ -1185,6 +1255,7 @@ impl TaggedNfaJitCompiler {
                 );
                 self.emit_range_check(&byte_class.ranges, loop_done)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                     ; jmp =>loop_start
                     ; =>loop_done
@@ -1211,12 +1282,14 @@ impl TaggedNfaJitCompiler {
             }
             PatternStep::StartOfText => {
                 dynasm!(self.asm
+                    ; .arch x64
                     ; test r14, r14
                     ; jnz =>fail_label
                 );
             }
             PatternStep::EndOfText => {
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jne =>fail_label
                 );
@@ -1224,6 +1297,7 @@ impl TaggedNfaJitCompiler {
             PatternStep::StartOfLine => {
                 let at_start = self.asm.new_dynamic_label();
                 dynasm!(self.asm
+                    ; .arch x64
                     ; test r14, r14
                     ; jz =>at_start
                     ; mov rax, r14
@@ -1237,6 +1311,7 @@ impl TaggedNfaJitCompiler {
             PatternStep::EndOfLine => {
                 let at_end = self.asm.new_dynamic_label();
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; je =>at_end
                     ; movzx eax, BYTE [rbx + r14]
@@ -1312,12 +1387,14 @@ impl TaggedNfaJitCompiler {
 
         // Must match at least one character (greedy plus)
         dynasm!(self.asm
+            ; .arch x64
             ; cmp r14, r12
             ; jge =>fail_label             // No input available
             ; movzx eax, BYTE [rbx + r14]
         );
         self.emit_range_check(ranges, fail_label)?;
         dynasm!(self.asm
+            ; .arch x64
             ; inc r14                      // Consumed first byte
             ; mov r9, r14                  // r9 = minimum position (need at least 1 match)
 
@@ -1329,6 +1406,7 @@ impl TaggedNfaJitCompiler {
         );
         self.emit_range_check(ranges, greedy_done)?;
         dynasm!(self.asm
+            ; .arch x64
             ; inc r14
             ; jmp =>greedy_loop
 
@@ -1344,6 +1422,7 @@ impl TaggedNfaJitCompiler {
         let lookahead_inner_mismatch = self.asm.new_dynamic_label();
 
         dynasm!(self.asm
+            ; .arch x64
             ; mov r10, r14                 // Save position for restoration
         );
 
@@ -1352,6 +1431,7 @@ impl TaggedNfaJitCompiler {
             match step {
                 PatternStep::Byte(byte) => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jge =>lookahead_inner_mismatch
                         ; movzx eax, BYTE [rbx + r14]
@@ -1362,12 +1442,14 @@ impl TaggedNfaJitCompiler {
                 }
                 PatternStep::ByteClass(inner_byte_class) => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jge =>lookahead_inner_mismatch
                         ; movzx eax, BYTE [rbx + r14]
                     );
                     self.emit_range_check(&inner_byte_class.ranges, lookahead_inner_mismatch)?;
                     dynasm!(self.asm
+                        ; .arch x64
                         ; inc r14
                     );
                 }
@@ -1379,12 +1461,14 @@ impl TaggedNfaJitCompiler {
                 }
                 PatternStep::EndOfText => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jne =>lookahead_inner_mismatch
                     );
                 }
                 PatternStep::StartOfText => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; test r14, r14
                         ; jnz =>lookahead_inner_mismatch
                     );
@@ -1398,6 +1482,7 @@ impl TaggedNfaJitCompiler {
 
         // Lookahead inner pattern matched
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>lookahead_inner_match
             ; =>lookahead_inner_mismatch
         );
@@ -1405,6 +1490,7 @@ impl TaggedNfaJitCompiler {
         if is_positive {
             // Positive lookahead failed - try backtracking
             dynasm!(self.asm
+                ; .arch x64
                 ; mov r14, r10             // Restore position
                 ; jmp =>lookahead_failed
                 ; =>lookahead_inner_match
@@ -1415,6 +1501,7 @@ impl TaggedNfaJitCompiler {
             // Negative lookahead: inner mismatch means assertion succeeds
             // (we're at lookahead_inner_mismatch here, so inner pattern didn't match)
             dynasm!(self.asm
+                ; .arch x64
                 ; mov r14, r10             // Restore position
                 ; jmp =>success            // Inner didn't match = neg lookahead succeeds
                 ; =>lookahead_inner_match
@@ -1425,6 +1512,7 @@ impl TaggedNfaJitCompiler {
 
         // Lookahead failed - backtrack one position
         dynasm!(self.asm
+            ; .arch x64
             ; =>lookahead_failed
             ; dec r14                      // Backtrack one position
             ; cmp r14, r9
@@ -1455,6 +1543,7 @@ impl TaggedNfaJitCompiler {
 
         // Star can match zero - save current position as minimum
         dynasm!(self.asm
+            ; .arch x64
             ; mov r9, r14                  // r9 = minimum position (can be 0 matches)
 
             // Greedy loop: consume as many as possible
@@ -1465,6 +1554,7 @@ impl TaggedNfaJitCompiler {
         );
         self.emit_range_check(ranges, greedy_done)?;
         dynasm!(self.asm
+            ; .arch x64
             ; inc r14
             ; jmp =>greedy_loop
 
@@ -1480,6 +1570,7 @@ impl TaggedNfaJitCompiler {
         let lookahead_inner_mismatch = self.asm.new_dynamic_label();
 
         dynasm!(self.asm
+            ; .arch x64
             ; mov r10, r14                 // Save position for restoration
         );
 
@@ -1487,6 +1578,7 @@ impl TaggedNfaJitCompiler {
             match step {
                 PatternStep::Byte(byte) => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jge =>lookahead_inner_mismatch
                         ; movzx eax, BYTE [rbx + r14]
@@ -1497,12 +1589,14 @@ impl TaggedNfaJitCompiler {
                 }
                 PatternStep::ByteClass(inner_byte_class) => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jge =>lookahead_inner_mismatch
                         ; movzx eax, BYTE [rbx + r14]
                     );
                     self.emit_range_check(&inner_byte_class.ranges, lookahead_inner_mismatch)?;
                     dynasm!(self.asm
+                        ; .arch x64
                         ; inc r14
                     );
                 }
@@ -1514,12 +1608,14 @@ impl TaggedNfaJitCompiler {
                 }
                 PatternStep::EndOfText => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jne =>lookahead_inner_mismatch
                     );
                 }
                 PatternStep::StartOfText => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; test r14, r14
                         ; jnz =>lookahead_inner_mismatch
                     );
@@ -1529,6 +1625,7 @@ impl TaggedNfaJitCompiler {
         }
 
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>lookahead_inner_match
             ; =>lookahead_inner_mismatch
         );
@@ -1536,6 +1633,7 @@ impl TaggedNfaJitCompiler {
         if is_positive {
             // Positive lookahead: inner mismatch means lookahead failed
             dynasm!(self.asm
+                ; .arch x64
                 ; mov r14, r10
                 ; jmp =>lookahead_failed
                 ; =>lookahead_inner_match
@@ -1545,6 +1643,7 @@ impl TaggedNfaJitCompiler {
         } else {
             // Negative lookahead: inner match means lookahead assertion fails
             dynasm!(self.asm
+                ; .arch x64
                 ; mov r14, r10
                 ; jmp =>success             // Inner mismatch = negative lookahead succeeds
                 ; =>lookahead_inner_match
@@ -1554,6 +1653,7 @@ impl TaggedNfaJitCompiler {
         }
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>lookahead_failed
             ; cmp r14, r9
             ; jle =>fail_label             // At or below minimum - fail
@@ -1582,6 +1682,7 @@ impl TaggedNfaJitCompiler {
             PatternStep::Byte(byte) => {
                 // Check bounds and byte value
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jge =>fail_label           // Not enough input
                     ; movzx eax, BYTE [rbx + r14]
@@ -1593,12 +1694,14 @@ impl TaggedNfaJitCompiler {
             PatternStep::ByteClass(byte_class) => {
                 // Check bounds
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jge =>fail_label           // Not enough input
                     ; movzx eax, BYTE [rbx + r14]
                 );
                 self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14                    // Consume the suffix byte
                 );
             }
@@ -1627,6 +1730,7 @@ impl TaggedNfaJitCompiler {
         // Word characters: [a-zA-Z0-9_]
         // Check ranges: a-z (0x61-0x7a), A-Z (0x41-0x5a), 0-9 (0x30-0x39), _ (0x5f)
         dynasm!(self.asm
+            ; .arch x64
             // Check 'a'-'z'
             ; mov cl, al
             ; sub cl, 0x61u8 as i8   // 'a'
@@ -1683,6 +1787,7 @@ impl TaggedNfaJitCompiler {
 
         // Check previous character (at pos-1)
         dynasm!(self.asm
+            ; .arch x64
             ; cmp r14, 0
             ; je =>prev_not_word           // At start, prev is non-word
             ; movzx eax, BYTE [rbx + r14 - 1]
@@ -1691,6 +1796,7 @@ impl TaggedNfaJitCompiler {
 
         // prev_is_word = true (stored in r8b: 1 = word, 0 = non-word)
         dynasm!(self.asm
+            ; .arch x64
             ; =>prev_word
             ; mov r8b, 1
             ; jmp =>check_curr
@@ -1698,12 +1804,14 @@ impl TaggedNfaJitCompiler {
 
         // prev_is_word = false
         dynasm!(self.asm
+            ; .arch x64
             ; =>prev_not_word
             ; mov r8b, 0
         );
 
         // Check current character (at pos)
         dynasm!(self.asm
+            ; .arch x64
             ; =>check_curr
             ; cmp r14, r12
             ; jge =>curr_not_word          // At end, curr is non-word
@@ -1713,6 +1821,7 @@ impl TaggedNfaJitCompiler {
 
         // curr_is_word = true (stored in r9b)
         dynasm!(self.asm
+            ; .arch x64
             ; =>curr_word
             ; mov r9b, 1
             ; jmp =>boundary_match
@@ -1720,12 +1829,14 @@ impl TaggedNfaJitCompiler {
 
         // curr_is_word = false
         dynasm!(self.asm
+            ; .arch x64
             ; =>curr_not_word
             ; xor r9d, r9d                 // r9b = 0
         );
 
         // Check XOR of r8b and r9b
         dynasm!(self.asm
+            ; .arch x64
             ; =>boundary_match
             ; xor r8b, r9b                 // r8b = prev_word XOR curr_word
         );
@@ -1733,12 +1844,14 @@ impl TaggedNfaJitCompiler {
         if is_boundary {
             // \b: need XOR to be 1 (boundary exists)
             dynasm!(self.asm
+                ; .arch x64
                 ; test r8b, r8b
                 ; jz =>fail_label          // XOR is 0 means no boundary
             );
         } else {
             // \B: need XOR to be 0 (no boundary)
             dynasm!(self.asm
+                ; .arch x64
                 ; test r8b, r8b
                 ; jnz =>fail_label         // XOR is 1 means there is a boundary
             );
@@ -1810,12 +1923,14 @@ impl TaggedNfaJitCompiler {
 
         // Must match at least one character (greedy plus)
         dynasm!(self.asm
+            ; .arch x64
             ; cmp r14, r12
             ; jge =>fail_label             // No input available
             ; movzx eax, BYTE [rbx + r14]
         );
         self.emit_range_check(ranges, fail_label)?;
         dynasm!(self.asm
+            ; .arch x64
             ; inc r14                      // Consumed first byte
             ; mov r9, r14                  // r9 = minimum position (need at least 1 match)
 
@@ -1827,6 +1942,7 @@ impl TaggedNfaJitCompiler {
         );
         self.emit_range_check(ranges, greedy_done)?;
         dynasm!(self.asm
+            ; .arch x64
             ; inc r14
             ; jmp =>greedy_loop
 
@@ -1843,6 +1959,7 @@ impl TaggedNfaJitCompiler {
         let lookahead_inner_mismatch = self.asm.new_dynamic_label();
 
         dynasm!(self.asm
+            ; .arch x64
             ; mov r10, r14                 // Save position for restoration
         );
 
@@ -1851,6 +1968,7 @@ impl TaggedNfaJitCompiler {
             match step {
                 PatternStep::Byte(byte) => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jge =>lookahead_inner_mismatch
                         ; movzx eax, BYTE [rbx + r14]
@@ -1861,12 +1979,14 @@ impl TaggedNfaJitCompiler {
                 }
                 PatternStep::ByteClass(inner_byte_class) => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jge =>lookahead_inner_mismatch
                         ; movzx eax, BYTE [rbx + r14]
                     );
                     self.emit_range_check(&inner_byte_class.ranges, lookahead_inner_mismatch)?;
                     dynasm!(self.asm
+                        ; .arch x64
                         ; inc r14
                     );
                 }
@@ -1879,6 +1999,7 @@ impl TaggedNfaJitCompiler {
                 }
                 PatternStep::EndOfText => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jne =>lookahead_inner_mismatch
                     );
@@ -1895,6 +2016,7 @@ impl TaggedNfaJitCompiler {
 
         // Lookahead inner pattern matched
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>lookahead_inner_match
             ; =>lookahead_inner_mismatch
         );
@@ -1902,6 +2024,7 @@ impl TaggedNfaJitCompiler {
         if is_positive {
             // Positive lookahead failed - try backtracking
             dynasm!(self.asm
+                ; .arch x64
                 ; mov r14, r10             // Restore position
                 ; jmp =>lookahead_failed
                 ; =>lookahead_inner_match
@@ -1912,6 +2035,7 @@ impl TaggedNfaJitCompiler {
             // Negative lookahead: inner mismatch means assertion succeeds
             // (we're at lookahead_inner_mismatch here, so inner pattern didn't match)
             dynasm!(self.asm
+                ; .arch x64
                 ; mov r14, r10             // Restore position
                 ; jmp =>success            // Inner didn't match = neg lookahead succeeds
                 ; =>lookahead_inner_match
@@ -1922,6 +2046,7 @@ impl TaggedNfaJitCompiler {
 
         // Lookahead failed - backtrack one position
         dynasm!(self.asm
+            ; .arch x64
             ; =>lookahead_failed
             ; dec r14                      // Backtrack one position
             ; cmp r14, r9
@@ -1963,12 +2088,14 @@ impl TaggedNfaJitCompiler {
 
         // Must match at least one character (greedy plus)
         dynasm!(self.asm
+            ; .arch x64
             ; cmp r14, r12
             ; jge =>fail_label             // No input available
             ; movzx eax, BYTE [rbx + r14]
         );
         self.emit_range_check(ranges, fail_label)?;
         dynasm!(self.asm
+            ; .arch x64
             ; inc r14                      // Consumed first byte
 
             // Greedy loop: consume as many as possible
@@ -1979,6 +2106,7 @@ impl TaggedNfaJitCompiler {
         );
         self.emit_range_check(ranges, greedy_done)?;
         dynasm!(self.asm
+            ; .arch x64
             ; inc r14
             ; jmp =>greedy_loop
 
@@ -1990,6 +2118,7 @@ impl TaggedNfaJitCompiler {
         // Step 1: Find star_end - the extent of where `.*` can match to
         // r9 starts at r14 (position after greedy+), then we scan forward while star_ranges match
         dynasm!(self.asm
+            ; .arch x64
             ; mov r9, r14                  // r9 = star_end, starts at current pos
 
             ; =>star_loop
@@ -2002,6 +2131,7 @@ impl TaggedNfaJitCompiler {
         self.emit_range_check(star_ranges, star_done)?;
 
         dynasm!(self.asm
+            ; .arch x64
             ; inc r9                       // Matched, advance star_end
             ; jmp =>star_loop
 
@@ -2012,6 +2142,7 @@ impl TaggedNfaJitCompiler {
         // Step 2: Scan from r14 to r9 looking for ANY match of final_ranges
         // r10 = scan position
         dynasm!(self.asm
+            ; .arch x64
             ; mov r10, r14                 // r10 = scan position, starts at current pos
 
             ; =>scan_loop
@@ -2029,6 +2160,7 @@ impl TaggedNfaJitCompiler {
 
         // If we reach here, final_ranges matched!
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>found_match
 
             ; =>check_next
@@ -2043,6 +2175,7 @@ impl TaggedNfaJitCompiler {
         if is_positive {
             // Positive lookahead: we need to find a match
             dynasm!(self.asm
+                ; .arch x64
                 ; jmp =>fail_label         // No match found -> fail
 
                 ; =>found_match
@@ -2053,6 +2186,7 @@ impl TaggedNfaJitCompiler {
         } else {
             // Negative lookahead: we need to NOT find a match
             dynasm!(self.asm
+                ; .arch x64
                 ; jmp =>success            // No match found -> success
 
                 ; =>found_match
@@ -2061,6 +2195,7 @@ impl TaggedNfaJitCompiler {
         }
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>success
             // r14 unchanged from greedy+ position (lookahead is zero-width)
         );
@@ -2118,6 +2253,7 @@ impl TaggedNfaJitCompiler {
 
         // Star can match zero - save current position as minimum
         dynasm!(self.asm
+            ; .arch x64
             ; mov r9, r14                  // r9 = minimum position (can be 0 matches)
 
             // Greedy loop: consume as many as possible
@@ -2128,6 +2264,7 @@ impl TaggedNfaJitCompiler {
         );
         self.emit_range_check(ranges, greedy_done)?;
         dynasm!(self.asm
+            ; .arch x64
             ; inc r14
             ; jmp =>greedy_loop
 
@@ -2143,6 +2280,7 @@ impl TaggedNfaJitCompiler {
         let lookahead_inner_mismatch = self.asm.new_dynamic_label();
 
         dynasm!(self.asm
+            ; .arch x64
             ; mov r10, r14                 // Save position for restoration
         );
 
@@ -2150,6 +2288,7 @@ impl TaggedNfaJitCompiler {
             match step {
                 PatternStep::Byte(byte) => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jge =>lookahead_inner_mismatch
                         ; movzx eax, BYTE [rbx + r14]
@@ -2160,12 +2299,14 @@ impl TaggedNfaJitCompiler {
                 }
                 PatternStep::ByteClass(inner_byte_class) => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jge =>lookahead_inner_mismatch
                         ; movzx eax, BYTE [rbx + r14]
                     );
                     self.emit_range_check(&inner_byte_class.ranges, lookahead_inner_mismatch)?;
                     dynasm!(self.asm
+                        ; .arch x64
                         ; inc r14
                     );
                 }
@@ -2177,6 +2318,7 @@ impl TaggedNfaJitCompiler {
                 }
                 PatternStep::EndOfText => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r14, r12
                         ; jne =>lookahead_inner_mismatch
                     );
@@ -2191,6 +2333,7 @@ impl TaggedNfaJitCompiler {
         }
 
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>lookahead_inner_match
             ; =>lookahead_inner_mismatch
         );
@@ -2198,6 +2341,7 @@ impl TaggedNfaJitCompiler {
         if is_positive {
             // Positive lookahead: inner mismatch means assertion fails
             dynasm!(self.asm
+                ; .arch x64
                 ; mov r14, r10
                 ; jmp =>lookahead_failed
                 ; =>lookahead_inner_match
@@ -2207,6 +2351,7 @@ impl TaggedNfaJitCompiler {
         } else {
             // Negative lookahead: inner mismatch means assertion succeeds
             dynasm!(self.asm
+                ; .arch x64
                 ; mov r14, r10
                 ; jmp =>success            // Inner didn't match = neg lookahead succeeds
                 ; =>lookahead_inner_match
@@ -2216,6 +2361,7 @@ impl TaggedNfaJitCompiler {
         }
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>lookahead_failed
             ; cmp r14, r9
             ; jle =>fail_label             // At or below minimum - fail
@@ -2254,6 +2400,7 @@ impl TaggedNfaJitCompiler {
 
         // Greedy star: match zero or more characters
         dynasm!(self.asm
+            ; .arch x64
             ; =>greedy_loop
             ; cmp r14, r12
             ; jge =>greedy_done            // End of input
@@ -2261,6 +2408,7 @@ impl TaggedNfaJitCompiler {
         );
         self.emit_range_check(ranges, greedy_done)?;
         dynasm!(self.asm
+            ; .arch x64
             ; inc r14
             ; jmp =>greedy_loop
 
@@ -2271,6 +2419,7 @@ impl TaggedNfaJitCompiler {
 
         // Step 1: Find star_end - the extent of where `.*` can match to
         dynasm!(self.asm
+            ; .arch x64
             ; mov r9, r14                  // r9 = star_end, starts at current pos
 
             ; =>star_loop
@@ -2282,6 +2431,7 @@ impl TaggedNfaJitCompiler {
         self.emit_range_check(star_ranges, star_done)?;
 
         dynasm!(self.asm
+            ; .arch x64
             ; inc r9
             ; jmp =>star_loop
 
@@ -2291,6 +2441,7 @@ impl TaggedNfaJitCompiler {
 
         // Step 2: Scan from r14 to r9 looking for ANY match of final_ranges
         dynasm!(self.asm
+            ; .arch x64
             ; mov r10, r14                 // r10 = scan position
 
             ; =>scan_loop
@@ -2306,6 +2457,7 @@ impl TaggedNfaJitCompiler {
         self.emit_range_check(final_ranges, check_next)?;
 
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>found_match
 
             ; =>check_next
@@ -2317,6 +2469,7 @@ impl TaggedNfaJitCompiler {
 
         if is_positive {
             dynasm!(self.asm
+                ; .arch x64
                 ; jmp =>fail_label
 
                 ; =>found_match
@@ -2324,6 +2477,7 @@ impl TaggedNfaJitCompiler {
             );
         } else {
             dynasm!(self.asm
+                ; .arch x64
                 ; jmp =>success
 
                 ; =>found_match
@@ -2332,6 +2486,7 @@ impl TaggedNfaJitCompiler {
         }
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>success
         );
 
@@ -2362,12 +2517,14 @@ impl TaggedNfaJitCompiler {
 
         // Must match at least one character
         dynasm!(self.asm
+            ; .arch x64
             ; cmp r14, r12
             ; jge =>fail_label             // No input available
             ; movzx eax, BYTE [rbx + r14]
         );
         self.emit_range_check(ranges, fail_label)?;
         dynasm!(self.asm
+            ; .arch x64
             ; inc r14                      // Consumed first byte
             ; mov r9, r14                  // r9 = minimum position (need at least 1 match)
 
@@ -2379,6 +2536,7 @@ impl TaggedNfaJitCompiler {
         );
         self.emit_range_check(ranges, greedy_done)?;
         dynasm!(self.asm
+            ; .arch x64
             ; inc r14
             ; jmp =>greedy_loop
 
@@ -2397,6 +2555,7 @@ impl TaggedNfaJitCompiler {
 
         // All remaining steps matched - success
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>success
 
             ; =>backtrack
@@ -2430,6 +2589,7 @@ impl TaggedNfaJitCompiler {
         let success = self.asm.new_dynamic_label();
 
         dynasm!(self.asm
+            ; .arch x64
             ; mov r9, r14                  // r9 = minimum position (can match 0)
 
             // Greedy loop: consume as many as possible
@@ -2440,6 +2600,7 @@ impl TaggedNfaJitCompiler {
         );
         self.emit_range_check(ranges, greedy_done)?;
         dynasm!(self.asm
+            ; .arch x64
             ; inc r14
             ; jmp =>greedy_loop
 
@@ -2456,6 +2617,7 @@ impl TaggedNfaJitCompiler {
 
         // All remaining steps matched - success
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>success
 
             ; =>backtrack
@@ -2503,16 +2665,19 @@ impl TaggedNfaJitCompiler {
 
         // r10 will track the number of saved boundaries on stack
         dynasm!(self.asm
+            ; .arch x64
             ; xor r10d, r10d               // r10 = boundary count = 0
         );
 
         // First iteration: must match at least one codepoint
         self.emit_utf8_decode(fail_label)?;
         dynasm!(self.asm
+            ; .arch x64
             ; push rcx                     // Save byte length
         );
         self.emit_codepoint_class_membership_check(cpclass, first_fail_with_stack)?;
         dynasm!(self.asm
+            ; .arch x64
             ; pop rcx
             ; add r14, rcx                 // Advance position
             ; push r14                     // Save boundary position
@@ -2524,10 +2689,12 @@ impl TaggedNfaJitCompiler {
 
         self.emit_utf8_decode(loop_fail_no_stack)?;
         dynasm!(self.asm
+            ; .arch x64
             ; push rcx                     // Save byte length
         );
         self.emit_codepoint_class_membership_check(cpclass, loop_fail_with_stack)?;
         dynasm!(self.asm
+            ; .arch x64
             ; pop rcx
             ; add r14, rcx                 // Advance position
             ; push r14                     // Save boundary position
@@ -2561,6 +2728,7 @@ impl TaggedNfaJitCompiler {
         // All remaining steps matched - success!
         // Clean up stack (pop all saved boundaries)
         dynasm!(self.asm
+            ; .arch x64
             ; =>success
             ; lea rsp, [rsp + r10 * 8]     // Pop all boundary positions
             ; jmp >done
@@ -2601,6 +2769,7 @@ impl TaggedNfaJitCompiler {
         match step {
             PatternStep::Byte(byte) => {
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
@@ -2611,12 +2780,14 @@ impl TaggedNfaJitCompiler {
             }
             PatternStep::ByteClass(byte_class) => {
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
                 self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                 );
             }
@@ -2626,12 +2797,14 @@ impl TaggedNfaJitCompiler {
                 let loop_done = self.asm.new_dynamic_label();
 
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
                 self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                     ; =>loop_start
                     ; cmp r14, r12
@@ -2640,6 +2813,7 @@ impl TaggedNfaJitCompiler {
                 );
                 self.emit_range_check(&byte_class.ranges, loop_done)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                     ; jmp =>loop_start
                     ; =>loop_done
@@ -2650,6 +2824,7 @@ impl TaggedNfaJitCompiler {
                 let loop_done = self.asm.new_dynamic_label();
 
                 dynasm!(self.asm
+                    ; .arch x64
                     ; =>loop_start
                     ; cmp r14, r12
                     ; jge =>loop_done
@@ -2657,6 +2832,7 @@ impl TaggedNfaJitCompiler {
                 );
                 self.emit_range_check(&byte_class.ranges, loop_done)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                     ; jmp =>loop_start
                     ; =>loop_done
@@ -2677,12 +2853,14 @@ impl TaggedNfaJitCompiler {
             }
             PatternStep::StartOfText => {
                 dynasm!(self.asm
+                    ; .arch x64
                     ; test r14, r14
                     ; jnz =>fail_label
                 );
             }
             PatternStep::EndOfText => {
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jne =>fail_label
                 );
@@ -2690,6 +2868,7 @@ impl TaggedNfaJitCompiler {
             PatternStep::StartOfLine => {
                 let at_start = self.asm.new_dynamic_label();
                 dynasm!(self.asm
+                    ; .arch x64
                     ; test r14, r14
                     ; jz =>at_start
                     ; mov rax, r14
@@ -2703,6 +2882,7 @@ impl TaggedNfaJitCompiler {
             PatternStep::EndOfLine => {
                 let at_end = self.asm.new_dynamic_label();
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; je =>at_end
                     ; movzx eax, BYTE [rbx + r14]
@@ -2736,6 +2916,7 @@ impl TaggedNfaJitCompiler {
 
                     // Save position for this alternative
                     dynasm!(self.asm
+                        ; .arch x64
                         ; push r14
                     );
 
@@ -2745,12 +2926,14 @@ impl TaggedNfaJitCompiler {
 
                     // This alternative succeeded
                     dynasm!(self.asm
+                        ; .arch x64
                         ; add rsp, 8               // Pop saved position (don't restore)
                         ; jmp =>alt_success
                     );
 
                     // Restore position and try next alternative (or fail)
                     dynasm!(self.asm
+                        ; .arch x64
                         ; =>try_next
                         ; pop r14
                     );
@@ -2758,11 +2941,13 @@ impl TaggedNfaJitCompiler {
                     if is_last {
                         // Last alternative failed - jump to outer fail_label
                         dynasm!(self.asm
+                            ; .arch x64
                             ; jmp =>fail_label
                         );
                     }
                 }
                 dynasm!(self.asm
+                    ; .arch x64
                     ; =>alt_success
                 );
             }
@@ -2832,6 +3017,7 @@ impl TaggedNfaJitCompiler {
 
         // Save current position (lookahead is zero-width)
         dynasm!(self.asm
+            ; .arch x64
             ; mov r9, r14                  // r9 = saved position
         );
 
@@ -2846,6 +3032,7 @@ impl TaggedNfaJitCompiler {
                     if positive {
                         // Positive: mismatch means lookahead fails
                         dynasm!(self.asm
+                            ; .arch x64
                             ; cmp r9, r12
                             ; jge =>fail_label         // No more input - fail
                             ; movzx eax, BYTE [rbx + r9]
@@ -2856,6 +3043,7 @@ impl TaggedNfaJitCompiler {
                     } else {
                         // Negative: mismatch means lookahead succeeds (inner didn't match)
                         dynasm!(self.asm
+                            ; .arch x64
                             ; cmp r9, r12
                             ; jge =>inner_match        // No more input - inner didn't match, success
                             ; movzx eax, BYTE [rbx + r9]
@@ -2869,6 +3057,7 @@ impl TaggedNfaJitCompiler {
                     // Check bounds
                     if positive {
                         dynasm!(self.asm
+                            ; .arch x64
                             ; cmp r9, r12
                             ; jge =>fail_label
                             ; movzx eax, BYTE [rbx + r9]
@@ -2881,10 +3070,12 @@ impl TaggedNfaJitCompiler {
                             fail_label,
                         )?;
                         dynasm!(self.asm
+                            ; .arch x64
                             ; inc r9
                         );
                     } else {
                         dynasm!(self.asm
+                            ; .arch x64
                             ; cmp r9, r12
                             ; jge =>inner_match
                             ; movzx eax, BYTE [rbx + r9]
@@ -2896,6 +3087,7 @@ impl TaggedNfaJitCompiler {
                             inner_match,
                         )?;
                         dynasm!(self.asm
+                            ; .arch x64
                             ; inc r9
                         );
                     }
@@ -2911,11 +3103,13 @@ impl TaggedNfaJitCompiler {
                 PatternStep::EndOfText => {
                     if positive {
                         dynasm!(self.asm
+                            ; .arch x64
                             ; cmp r9, r12
                             ; jne =>fail_label
                         );
                     } else {
                         dynasm!(self.asm
+                            ; .arch x64
                             ; cmp r9, r12
                             ; jne =>inner_match
                         );
@@ -2924,11 +3118,13 @@ impl TaggedNfaJitCompiler {
                 PatternStep::StartOfText => {
                     if positive {
                         dynasm!(self.asm
+                            ; .arch x64
                             ; test r9, r9
                             ; jnz =>fail_label
                         );
                     } else {
                         dynasm!(self.asm
+                            ; .arch x64
                             ; test r9, r9
                             ; jnz =>inner_match
                         );
@@ -2941,6 +3137,7 @@ impl TaggedNfaJitCompiler {
                     let loop_done = self.asm.new_dynamic_label();
 
                     dynasm!(self.asm
+                        ; .arch x64
                         ; =>loop_start
                         ; cmp r9, r12
                         ; jge =>loop_done              // End of input - done looping
@@ -2951,6 +3148,7 @@ impl TaggedNfaJitCompiler {
                     self.emit_range_check(&byte_class.ranges, loop_done)?;
 
                     dynasm!(self.asm
+                        ; .arch x64
                         ; inc r9                       // Consumed another byte
                         ; jmp =>loop_start
                         ; =>loop_done
@@ -2962,6 +3160,7 @@ impl TaggedNfaJitCompiler {
                     // First check we have at least one match
                     if positive {
                         dynasm!(self.asm
+                            ; .arch x64
                             ; cmp r9, r12
                             ; jge =>fail_label         // No input - fail
                             ; movzx eax, BYTE [rbx + r9]
@@ -2969,6 +3168,7 @@ impl TaggedNfaJitCompiler {
                         self.emit_range_check(&byte_class.ranges, fail_label)?;
                     } else {
                         dynasm!(self.asm
+                            ; .arch x64
                             ; cmp r9, r12
                             ; jge =>inner_match        // No input - inner didn't match
                             ; movzx eax, BYTE [rbx + r9]
@@ -2977,6 +3177,7 @@ impl TaggedNfaJitCompiler {
                     }
 
                     dynasm!(self.asm
+                        ; .arch x64
                         ; inc r9                       // Consumed first byte
                     );
 
@@ -2985,6 +3186,7 @@ impl TaggedNfaJitCompiler {
                     let loop_done = self.asm.new_dynamic_label();
 
                     dynasm!(self.asm
+                        ; .arch x64
                         ; =>loop_start
                         ; cmp r9, r12
                         ; jge =>loop_done
@@ -2994,6 +3196,7 @@ impl TaggedNfaJitCompiler {
                     self.emit_range_check(&byte_class.ranges, loop_done)?;
 
                     dynasm!(self.asm
+                        ; .arch x64
                         ; inc r9
                         ; jmp =>loop_start
                         ; =>loop_done
@@ -3016,12 +3219,14 @@ impl TaggedNfaJitCompiler {
         } else {
             // Negative lookahead: inner matched, so assertion fails
             dynasm!(self.asm
+                ; .arch x64
                 ; jmp =>fail_label
             );
         }
 
         // Label for negative lookahead success (inner didn't match)
         dynasm!(self.asm
+            ; .arch x64
             ; =>inner_match
         );
         // Position r14 unchanged (zero-width)
@@ -3060,6 +3265,7 @@ impl TaggedNfaJitCompiler {
         // Step 1: Find star_end - the extent of where `.*` can match to
         // r9 starts at r14 (current position), then we scan forward while star_ranges match
         dynasm!(self.asm
+            ; .arch x64
             ; mov r9, r14                  // r9 = star_end, starts at current pos
 
             ; =>star_loop
@@ -3072,6 +3278,7 @@ impl TaggedNfaJitCompiler {
         self.emit_range_check(star_ranges, star_done)?;
 
         dynasm!(self.asm
+            ; .arch x64
             ; inc r9                       // Matched, advance star_end
             ; jmp =>star_loop
 
@@ -3082,6 +3289,7 @@ impl TaggedNfaJitCompiler {
         // Step 2: Scan from r14 to r9 looking for ANY match of final_ranges
         // r10 = scan position
         dynasm!(self.asm
+            ; .arch x64
             ; mov r10, r14                 // r10 = scan position, starts at current pos
 
             ; =>scan_loop
@@ -3101,6 +3309,7 @@ impl TaggedNfaJitCompiler {
 
         // If we reach here, final_ranges matched!
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>found_match
 
             ; =>check_next
@@ -3117,6 +3326,7 @@ impl TaggedNfaJitCompiler {
             // scan_done means we didn't find one -> fail
             // found_match means we found one -> success (continue)
             dynasm!(self.asm
+                ; .arch x64
                 ; jmp =>fail_label         // No match found -> fail
 
                 ; =>found_match
@@ -3128,6 +3338,7 @@ impl TaggedNfaJitCompiler {
             // scan_done means we didn't find one -> success (continue)
             // found_match means we found one -> fail
             dynasm!(self.asm
+                ; .arch x64
                 ; jmp >neg_success         // No match found -> success
 
                 ; =>found_match
@@ -3155,6 +3366,7 @@ impl TaggedNfaJitCompiler {
             let range = &ranges[0];
             let range_size = range.end.wrapping_sub(range.start);
             dynasm!(self.asm
+                ; .arch x64
                 ; sub al, range.start as i8
                 ; cmp al, range_size as i8
                 ; ja =>target_on_fail
@@ -3167,6 +3379,7 @@ impl TaggedNfaJitCompiler {
 
                 if is_last {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; mov cl, al
                         ; sub cl, range.start as i8
                         ; cmp cl, range_size as i8
@@ -3174,6 +3387,7 @@ impl TaggedNfaJitCompiler {
                     );
                 } else {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; mov cl, al
                         ; sub cl, range.start as i8
                         ; cmp cl, range_size as i8
@@ -3182,6 +3396,7 @@ impl TaggedNfaJitCompiler {
                 }
             }
             dynasm!(self.asm
+                ; .arch x64
                 ; =>range_matched
             );
         }
@@ -3198,6 +3413,7 @@ impl TaggedNfaJitCompiler {
 
         // Get prev_is_word (r8b = 0 or 1)
         dynasm!(self.asm
+            ; .arch x64
             ; xor r8d, r8d                 // prev_is_word = false
             ; test r9, r9
             ; jz >check_curr               // At start, no prev char
@@ -3227,6 +3443,7 @@ impl TaggedNfaJitCompiler {
 
         // Get curr_is_word (compare with r8b)
         dynasm!(self.asm
+            ; .arch x64
             ; cmp r9, r12
             ; jge >at_end                  // At end, curr_is_word = false
             ; movzx eax, BYTE [rbx + r9]
@@ -3260,11 +3477,13 @@ impl TaggedNfaJitCompiler {
         // For \B: need XOR to be 0 (no boundary)
         if is_boundary {
             dynasm!(self.asm
+                ; .arch x64
                 ; test r8b, r8b
                 ; jz =>fail_label          // XOR is 0 means no boundary
             );
         } else {
             dynasm!(self.asm
+                ; .arch x64
                 ; test r8b, r8b
                 ; jnz =>fail_label         // XOR is 1 means boundary exists
             );
@@ -3299,12 +3518,14 @@ impl TaggedNfaJitCompiler {
 
         // Save current position
         dynasm!(self.asm
+            ; .arch x64
             ; mov r9, r14                  // r9 = saved position
         );
 
         // Check if there's enough space behind (current_pos >= min_len)
         if min_len > 0 {
             dynasm!(self.asm
+                ; .arch x64
                 ; cmp r14, min_len as i32
                 ; jl =>inner_mismatch          // Not enough characters behind
             );
@@ -3312,6 +3533,7 @@ impl TaggedNfaJitCompiler {
 
         // Set position to start of lookbehind check
         dynasm!(self.asm
+            ; .arch x64
             ; sub r14, min_len as i32      // r14 = current_pos - min_len
         );
 
@@ -3321,6 +3543,7 @@ impl TaggedNfaJitCompiler {
                 PatternStep::Byte(byte) => {
                     // We know there's exactly min_len bytes available
                     dynasm!(self.asm
+                        ; .arch x64
                         ; movzx eax, BYTE [rbx + r14]
                         ; cmp al, *byte as i8
                         ; jne =>inner_mismatch
@@ -3329,10 +3552,12 @@ impl TaggedNfaJitCompiler {
                 }
                 PatternStep::ByteClass(byte_class) => {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; movzx eax, BYTE [rbx + r14]
                     );
                     self.emit_range_check(&byte_class.ranges, inner_mismatch)?;
                     dynasm!(self.asm
+                        ; .arch x64
                         ; inc r14
                     );
                 }
@@ -3348,22 +3573,26 @@ impl TaggedNfaJitCompiler {
 
         // Inner pattern matched
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>inner_match
         );
 
         // Inner pattern didn't match
         dynasm!(self.asm
+            ; .arch x64
             ; =>inner_mismatch
         );
 
         if positive {
             // Positive lookbehind: inner mismatch means assertion fails
             dynasm!(self.asm
+                ; .arch x64
                 ; mov r14, r9              // Restore position
                 ; jmp =>fail_label
             );
 
             dynasm!(self.asm
+                ; .arch x64
                 ; =>inner_match
                 ; mov r14, r9              // Restore position (lookbehind is zero-width)
                 ; jmp =>done
@@ -3371,11 +3600,13 @@ impl TaggedNfaJitCompiler {
         } else {
             // Negative lookbehind: inner mismatch means assertion succeeds
             dynasm!(self.asm
+                ; .arch x64
                 ; mov r14, r9              // Restore position
                 ; jmp =>done
             );
 
             dynasm!(self.asm
+                ; .arch x64
                 ; =>inner_match
                 ; mov r14, r9              // Restore position
                 ; jmp =>fail_label
@@ -3383,6 +3614,7 @@ impl TaggedNfaJitCompiler {
         }
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>done
         );
 
@@ -3463,6 +3695,7 @@ impl TaggedNfaJitCompiler {
 
         // Check if at end of input
         dynasm!(self.asm
+            ; .arch x64
             ; cmp r14, r12
             ; jge =>fail_label
 
@@ -3490,6 +3723,7 @@ impl TaggedNfaJitCompiler {
 
         // ASCII (1 byte): codepoint = b0, len = 1
         dynasm!(self.asm
+            ; .arch x64
             ; =>ascii
             ; mov ecx, 1
             // eax already contains the codepoint
@@ -3498,6 +3732,7 @@ impl TaggedNfaJitCompiler {
 
         // 2-byte sequence: need 1 more byte
         dynasm!(self.asm
+            ; .arch x64
             ; =>two_byte
             ; mov r8, r14
             ; inc r8
@@ -3522,6 +3757,7 @@ impl TaggedNfaJitCompiler {
 
         // 3-byte sequence: need 2 more bytes
         dynasm!(self.asm
+            ; .arch x64
             ; =>three_byte
             ; mov r8, r14
             ; add r8, 2
@@ -3555,6 +3791,7 @@ impl TaggedNfaJitCompiler {
 
         // 4-byte sequence: need 3 more bytes
         dynasm!(self.asm
+            ; .arch x64
             ; =>four_byte
             ; mov r8, r14
             ; add r8, 3
@@ -3602,6 +3839,7 @@ impl TaggedNfaJitCompiler {
         );
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>done
             // eax = codepoint, ecx = byte length
         );
@@ -3637,6 +3875,7 @@ impl TaggedNfaJitCompiler {
 
         // ASCII fast path: if codepoint < 128, use bitmap lookup
         dynasm!(self.asm
+            ; .arch x64
             ; cmp eax, 128
             ; jb =>ascii_fast_path
         );
@@ -3681,6 +3920,7 @@ impl TaggedNfaJitCompiler {
         // Call the helper function with platform-specific calling convention
         #[cfg(target_os = "windows")]
         dynasm!(self.asm
+            ; .arch x64
             // eax already contains codepoint
             // Windows x64: args in RCX, RDX
             ; mov ecx, eax                    // rcx = codepoint (zero-extended)
@@ -3698,6 +3938,7 @@ impl TaggedNfaJitCompiler {
 
         #[cfg(not(target_os = "windows"))]
         dynasm!(self.asm
+            ; .arch x64
             // eax already contains codepoint
             // System V ABI: args in RDI, RSI
             ; mov edi, eax                    // rdi = codepoint (zero-extended)
@@ -3715,6 +3956,7 @@ impl TaggedNfaJitCompiler {
         // eax = codepoint (0-127)
         // bitmap[0] covers bits 0-63, bitmap[1] covers bits 64-127
         dynasm!(self.asm
+            ; .arch x64
             ; =>ascii_fast_path
             // Check if codepoint < 64 (use bitmap[0]) or >= 64 (use bitmap[1])
             ; cmp eax, 64
@@ -3741,16 +3983,19 @@ impl TaggedNfaJitCompiler {
         if is_negated {
             // Negated class: succeed if NOT in bitmap (CF=0)
             dynasm!(self.asm
+                ; .arch x64
                 ; jc =>fail_label    // CF=1 means in bitmap, but negated => fail
             );
         } else {
             // Normal class: succeed if in bitmap (CF=1)
             dynasm!(self.asm
+                ; .arch x64
                 ; jnc =>fail_label   // CF=0 means not in bitmap => fail
             );
         }
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>check_done
         );
 
@@ -3783,6 +4028,7 @@ impl TaggedNfaJitCompiler {
 
         // Save byte length on stack (we need it after the membership check)
         dynasm!(self.asm
+            ; .arch x64
             ; push rcx            // Save byte length
         );
 
@@ -3792,6 +4038,7 @@ impl TaggedNfaJitCompiler {
 
         // Restore byte length and advance position
         dynasm!(self.asm
+            ; .arch x64
             ; pop rcx             // Restore byte length
             ; add r14, rcx        // Advance position by byte_length
             ; jmp >done
@@ -3834,6 +4081,7 @@ impl TaggedNfaJitCompiler {
         self.emit_utf8_decode(fail_label)?;
 
         dynasm!(self.asm
+            ; .arch x64
             ; push rcx            // Save byte length
         );
 
@@ -3841,12 +4089,14 @@ impl TaggedNfaJitCompiler {
         self.emit_codepoint_class_membership_check(cpclass, first_fail_with_stack)?;
 
         dynasm!(self.asm
+            ; .arch x64
             ; pop rcx             // Restore byte length
             ; add r14, rcx        // Advance position
         );
 
         // Greedy loop: match as many more codepoints as possible
         dynasm!(self.asm
+            ; .arch x64
             ; =>loop_start
         );
 
@@ -3855,6 +4105,7 @@ impl TaggedNfaJitCompiler {
         self.emit_utf8_decode(loop_fail_no_stack)?;
 
         dynasm!(self.asm
+            ; .arch x64
             ; push rcx            // Save byte length
         );
 
@@ -3862,6 +4113,7 @@ impl TaggedNfaJitCompiler {
         self.emit_codepoint_class_membership_check(cpclass, loop_fail_with_stack)?;
 
         dynasm!(self.asm
+            ; .arch x64
             ; pop rcx             // Restore byte length
             ; add r14, rcx        // Advance position
             ; jmp =>loop_start
@@ -3934,6 +4186,7 @@ impl TaggedNfaJitCompiler {
         // On function entry: RSP is 8-mod-16 (return address pushed)
         #[cfg(target_os = "windows")]
         dynasm!(self.asm
+            ; .arch x64
             ; push rdi          // Callee-saved on Windows
             ; push rsi          // Callee-saved on Windows
             ; push rbx
@@ -3951,6 +4204,7 @@ impl TaggedNfaJitCompiler {
 
         #[cfg(not(target_os = "windows"))]
         dynasm!(self.asm
+            ; .arch x64
             ; push rbx
             ; push r12
             ; push r13
@@ -3968,6 +4222,7 @@ impl TaggedNfaJitCompiler {
         for slot in 0..num_slots {
             let slot_offset = (slot * 8) as i32;
             dynasm!(self.asm
+                ; .arch x64
                 ; mov QWORD [r15 + slot_offset], -1i32
             );
         }
@@ -3979,6 +4234,7 @@ impl TaggedNfaJitCompiler {
         let byte_mismatch = self.asm.new_dynamic_label();
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>start_loop
             ; mov rax, r12
             ; sub rax, r13
@@ -3988,11 +4244,13 @@ impl TaggedNfaJitCompiler {
 
         // r14 = current position
         dynasm!(self.asm
+            ; .arch x64
             ; mov r14, r13
         );
 
         // Set group 0 start (slot 0)
         dynasm!(self.asm
+            ; .arch x64
             ; mov QWORD [r15], r13
         );
 
@@ -4003,33 +4261,39 @@ impl TaggedNfaJitCompiler {
 
         // Match found
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>match_found
         );
 
         // Byte mismatch - reset captures and try next position
         dynasm!(self.asm
+            ; .arch x64
             ; =>byte_mismatch
         );
         // Reset capture slots to -1
         for slot in 0..num_slots {
             let slot_offset = (slot * 8) as i32;
             dynasm!(self.asm
+                ; .arch x64
                 ; mov QWORD [r15 + slot_offset], -1i32
             );
         }
         dynasm!(self.asm
+            ; .arch x64
             ; inc r13
             ; jmp =>start_loop
         );
 
         // Match found - set group 0 end (slot 1)
         dynasm!(self.asm
+            ; .arch x64
             ; =>match_found
             ; mov QWORD [r15 + 8], r14
         );
 
         // Return (start << 32 | end) to indicate success and positions
         dynasm!(self.asm
+            ; .arch x64
             ; mov rax, r13
             ; shl rax, 32
             ; or rax, r14
@@ -4038,6 +4302,7 @@ impl TaggedNfaJitCompiler {
         // Epilogue - restore callee-saved registers
         #[cfg(target_os = "windows")]
         dynasm!(self.asm
+            ; .arch x64
             ; pop r15
             ; pop r14
             ; pop r13
@@ -4049,6 +4314,7 @@ impl TaggedNfaJitCompiler {
         );
         #[cfg(not(target_os = "windows"))]
         dynasm!(self.asm
+            ; .arch x64
             ; pop r15
             ; pop r14
             ; pop r13
@@ -4059,6 +4325,7 @@ impl TaggedNfaJitCompiler {
 
         // No match
         dynasm!(self.asm
+            ; .arch x64
             ; =>no_match
             ; mov rax, -1i32
         );
@@ -4066,6 +4333,7 @@ impl TaggedNfaJitCompiler {
         // Epilogue - restore callee-saved registers
         #[cfg(target_os = "windows")]
         dynasm!(self.asm
+            ; .arch x64
             ; pop r15
             ; pop r14
             ; pop r13
@@ -4077,6 +4345,7 @@ impl TaggedNfaJitCompiler {
         );
         #[cfg(not(target_os = "windows"))]
         dynasm!(self.asm
+            ; .arch x64
             ; pop r15
             ; pop r14
             ; pop r13
@@ -4100,6 +4369,7 @@ impl TaggedNfaJitCompiler {
         match step {
             PatternStep::Byte(byte) => {
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
@@ -4110,12 +4380,14 @@ impl TaggedNfaJitCompiler {
             }
             PatternStep::ByteClass(byte_class) => {
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
                 self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                 );
             }
@@ -4124,12 +4396,14 @@ impl TaggedNfaJitCompiler {
                 let loop_done = self.asm.new_dynamic_label();
 
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
                 self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                     ; =>loop_start
                     ; cmp r14, r12
@@ -4138,6 +4412,7 @@ impl TaggedNfaJitCompiler {
                 );
                 self.emit_range_check(&byte_class.ranges, loop_done)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                     ; jmp =>loop_start
                     ; =>loop_done
@@ -4148,6 +4423,7 @@ impl TaggedNfaJitCompiler {
                 let loop_done = self.asm.new_dynamic_label();
 
                 dynasm!(self.asm
+                    ; .arch x64
                     ; =>loop_start
                     ; cmp r14, r12
                     ; jge =>loop_done
@@ -4155,6 +4431,7 @@ impl TaggedNfaJitCompiler {
                 );
                 self.emit_range_check(&byte_class.ranges, loop_done)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                     ; jmp =>loop_start
                     ; =>loop_done
@@ -4166,6 +4443,7 @@ impl TaggedNfaJitCompiler {
                 // Slot index = idx * 2 (but idx starts at 1 for capture groups, 0 is full match)
                 let slot_offset = ((*idx as usize) * 2 * 8) as i32;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; mov QWORD [r15 + slot_offset], r14
                 );
             }
@@ -4174,6 +4452,7 @@ impl TaggedNfaJitCompiler {
                 // Slot index = idx * 2 + 1
                 let slot_offset = ((*idx as usize) * 2 * 8 + 8) as i32;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; mov QWORD [r15 + slot_offset], r14
                 );
             }
@@ -4184,6 +4463,7 @@ impl TaggedNfaJitCompiler {
                 let alt_fail = self.asm.new_dynamic_label();
 
                 dynasm!(self.asm
+                    ; .arch x64
                     ; push r14    // Save position on stack
                 );
 
@@ -4200,12 +4480,14 @@ impl TaggedNfaJitCompiler {
                     }
 
                     dynasm!(self.asm
+                        ; .arch x64
                         ; add rsp, 8    // Clean up saved position
                         ; jmp =>alt_success
                     );
 
                     if !is_last {
                         dynasm!(self.asm
+                            ; .arch x64
                             ; =>try_next_alt
                             ; mov r14, [rsp]    // Restore position from stack
                         );
@@ -4214,12 +4496,14 @@ impl TaggedNfaJitCompiler {
 
                 // All alternatives failed - clean up and jump to outer fail label
                 dynasm!(self.asm
+                    ; .arch x64
                     ; =>alt_fail
                     ; add rsp, 8    // Clean up saved position
                     ; jmp =>fail_label
                 );
 
                 dynasm!(self.asm
+                    ; .arch x64
                     ; =>alt_success
                 );
             }
@@ -4292,6 +4576,7 @@ impl TaggedNfaJitCompiler {
                 let backref_match = self.asm.new_dynamic_label();
 
                 dynasm!(self.asm
+                    ; .arch x64
                     // Load capture start and end
                     ; mov r8, QWORD [r15 + start_offset]   // r8 = cap_start
                     ; mov r9, QWORD [r15 + end_offset]     // r9 = cap_end
@@ -4347,6 +4632,7 @@ impl TaggedNfaJitCompiler {
                 // r14 = current position, r13 = start_pos
                 // For anchored patterns, we only try matching at position 0
                 dynasm!(self.asm
+                    ; .arch x64
                     ; test r14, r14                 // r14 == 0?
                     ; jnz =>fail_label              // Fail if not at start
                 );
@@ -4355,6 +4641,7 @@ impl TaggedNfaJitCompiler {
                 // End of text: only matches at position == input_len
                 // r14 = current position, r12 = input_len
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12                  // r14 == r12?
                     ; jne =>fail_label              // Fail if not at end
                 );
@@ -4364,6 +4651,7 @@ impl TaggedNfaJitCompiler {
                 // r14 = current position, rbx = input_ptr
                 let at_start = self.asm.new_dynamic_label();
                 dynasm!(self.asm
+                    ; .arch x64
                     ; test r14, r14                 // r14 == 0?
                     ; jz =>at_start                 // At start of input - OK
                     // Check if previous byte is newline
@@ -4380,6 +4668,7 @@ impl TaggedNfaJitCompiler {
                 // r14 = current position, r12 = input_len, rbx = input_ptr
                 let at_end = self.asm.new_dynamic_label();
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12                  // r14 == r12?
                     ; je =>at_end                   // At end of input - OK
                     // Check if current byte is newline
@@ -4397,12 +4686,14 @@ impl TaggedNfaJitCompiler {
 
                 // Must match at least one
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r14, r12
                     ; jge =>fail_label
                     ; movzx eax, BYTE [rbx + r14]
                 );
                 self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
 
                     ; =>try_suffix
@@ -4412,6 +4703,7 @@ impl TaggedNfaJitCompiler {
                 self.emit_non_greedy_suffix_check(suffix, consume_more, suffix_matched)?;
 
                 dynasm!(self.asm
+                    ; .arch x64
                     ; jmp =>suffix_matched
 
                     ; =>consume_more
@@ -4421,6 +4713,7 @@ impl TaggedNfaJitCompiler {
                 );
                 self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                     ; jmp =>try_suffix
 
@@ -4434,6 +4727,7 @@ impl TaggedNfaJitCompiler {
                 let suffix_matched = self.asm.new_dynamic_label();
 
                 dynasm!(self.asm
+                    ; .arch x64
                     ; =>try_suffix
                 );
 
@@ -4441,6 +4735,7 @@ impl TaggedNfaJitCompiler {
                 self.emit_non_greedy_suffix_check(suffix, consume_more, suffix_matched)?;
 
                 dynasm!(self.asm
+                    ; .arch x64
                     ; jmp =>suffix_matched
 
                     ; =>consume_more
@@ -4450,6 +4745,7 @@ impl TaggedNfaJitCompiler {
                 );
                 self.emit_range_check(&byte_class.ranges, fail_label)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r14
                     ; jmp =>try_suffix
 

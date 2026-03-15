@@ -96,6 +96,7 @@ impl BacktrackingCompiler {
 
         // After pattern matches, jump to success
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>self.match_success_label
         );
 
@@ -140,6 +141,7 @@ impl BacktrackingCompiler {
 
         #[cfg(target_os = "windows")]
         dynasm!(self.asm
+            ; .arch x64
             ; push rdi              // Callee-saved on Windows
             ; push rsi              // Callee-saved on Windows
             ; push rbx
@@ -165,6 +167,7 @@ impl BacktrackingCompiler {
 
         #[cfg(not(target_os = "windows"))]
         dynasm!(self.asm
+            ; .arch x64
             ; push rbx
             ; push r12
             ; push r13
@@ -195,6 +198,7 @@ impl BacktrackingCompiler {
         for slot in 0..num_slots {
             let offset = (slot * 8) as i32;
             dynasm!(self.asm
+                ; .arch x64
                 ; mov QWORD [r12 + offset], rax
             );
         }
@@ -203,6 +207,7 @@ impl BacktrackingCompiler {
     /// Emits the main loop that tries each start position.
     fn emit_main_loop(&mut self) -> Result<()> {
         dynasm!(self.asm
+            ; .arch x64
             ; =>self.next_start_label
             // Reset captures for new attempt
             // Use rax = -1 for resetting
@@ -214,11 +219,13 @@ impl BacktrackingCompiler {
         for slot in 0..num_slots {
             let offset = (slot * 8) as i32;
             dynasm!(self.asm
+                ; .arch x64
                 ; mov QWORD [r12 + offset], rax
             );
         }
 
         dynasm!(self.asm
+            ; .arch x64
             // rcx = current position = start_pos
             ; mov rcx, r13
 
@@ -284,6 +291,7 @@ impl BacktrackingCompiler {
     fn emit_literal(&mut self, bytes: &[u8]) -> Result<()> {
         for &byte in bytes {
             dynasm!(self.asm
+                ; .arch x64
                 // Check if we're at end of input
                 ; cmp rcx, rsi
                 ; jge =>self.backtrack_label
@@ -308,6 +316,7 @@ impl BacktrackingCompiler {
         let no_match = self.asm.new_dynamic_label();
 
         dynasm!(self.asm
+            ; .arch x64
             // Check end of input
             ; cmp rcx, rsi
             ; jge =>self.backtrack_label
@@ -321,12 +330,14 @@ impl BacktrackingCompiler {
             if start == end {
                 // Single byte
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp al, start as i8
                     ; je =>match_ok
                 );
             } else {
                 // Range
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp al, start as i8
                     ; jb >next_range
                     ; cmp al, end as i8
@@ -338,10 +349,12 @@ impl BacktrackingCompiler {
 
         // No range matched
         dynasm!(self.asm
+            ; .arch x64
             ; jmp =>no_match
         );
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>match_ok
         );
 
@@ -349,19 +362,23 @@ impl BacktrackingCompiler {
         if class.negated {
             // If negated and we matched, backtrack
             dynasm!(self.asm
+                ; .arch x64
                 ; jmp =>self.backtrack_label
             );
             dynasm!(self.asm
+                ; .arch x64
                 ; =>no_match
                 ; inc rcx
             );
         } else {
             // If not negated and we matched, advance
             dynasm!(self.asm
+                ; .arch x64
                 ; inc rcx
                 ; jmp >done
             );
             dynasm!(self.asm
+                ; .arch x64
                 ; =>no_match
                 ; jmp =>self.backtrack_label
                 ; done:
@@ -388,6 +405,7 @@ impl BacktrackingCompiler {
 
                 // Save state for backtracking (32-byte entry, stack grows UP)
                 dynasm!(self.asm
+                    ; .arch x64
                     // Push backtrack point (add to grow up)
                     ; mov QWORD [rbx], rcx           // Save position
                     ; lea rax, [=>try_next]
@@ -402,6 +420,7 @@ impl BacktrackingCompiler {
 
                 // Success - jump past other alternatives
                 dynasm!(self.asm
+                    ; .arch x64
                     // Pop the choice point since we succeeded (sub to pop)
                     ; sub rbx, 32
                     ; jmp =>after_alt
@@ -409,6 +428,7 @@ impl BacktrackingCompiler {
 
                 // Label for trying next alternative (reached via backtrack)
                 dynasm!(self.asm
+                    ; .arch x64
                     ; =>try_next
                 );
             } else {
@@ -418,6 +438,7 @@ impl BacktrackingCompiler {
         }
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>after_alt
         );
 
@@ -444,10 +465,12 @@ impl BacktrackingCompiler {
 
         // Use r15 as countdown counter (avoids cmp instruction in loop)
         dynasm!(self.asm
+            ; .arch x64
             ; mov r15d, count as i32    // r15 = count
         );
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>loop_start
         );
 
@@ -455,6 +478,7 @@ impl BacktrackingCompiler {
         self.emit_pattern(expr)?;
 
         dynasm!(self.asm
+            ; .arch x64
             ; dec r15d
             ; jnz =>loop_start
         );
@@ -492,6 +516,7 @@ impl BacktrackingCompiler {
         // OPTIMIZATION 1: Bounds check - verify we have enough input upfront
         // This matches PCRE2-JIT's approach: fail fast before entering the loop
         dynasm!(self.asm
+            ; .arch x64
             // Calculate remaining: remaining = input_len - current_pos
             ; mov rax, rsi              // rax = input_len
             ; sub rax, rcx              // rax = remaining = len - pos
@@ -505,6 +530,7 @@ impl BacktrackingCompiler {
             let loop_start = self.asm.new_dynamic_label();
 
             dynasm!(self.asm
+                ; .arch x64
                 ; mov r15d, count as i32    // r15 = countdown
                 ; =>loop_start
 
@@ -526,6 +552,7 @@ impl BacktrackingCompiler {
             let loop_start = self.asm.new_dynamic_label();
 
             dynasm!(self.asm
+                ; .arch x64
                 ; mov r15d, count as i32    // r15 = countdown
                 ; =>loop_start
             );
@@ -533,6 +560,7 @@ impl BacktrackingCompiler {
             self.emit_class(class)?;
 
             dynasm!(self.asm
+                ; .arch x64
                 ; dec r15d
                 ; jnz =>loop_start
             );
@@ -564,6 +592,7 @@ impl BacktrackingCompiler {
 
         // Use r15 as iteration counter
         dynasm!(self.asm
+            ; .arch x64
             ; xor r15d, r15d    // r15 = count = 0
         );
 
@@ -575,12 +604,14 @@ impl BacktrackingCompiler {
             let try_backtrack = self.asm.new_dynamic_label();
 
             dynasm!(self.asm
+                ; .arch x64
                 ; =>loop_start
             );
 
             // Check max limit
             if let Some(max_val) = max {
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp r15d, max_val as i32
                     ; jge =>loop_done
                 );
@@ -590,6 +621,7 @@ impl BacktrackingCompiler {
             // When we fail later, we can come back here and try with fewer matches
             // Choice point format: [position, return_label, r13, r15] (32 bytes, stack grows UP)
             dynasm!(self.asm
+                ; .arch x64
                 ; mov QWORD [rbx], rcx              // Save position
                 ; lea rax, [=>try_backtrack]
                 ; mov QWORD [rbx + 8], rax          // Return address for backtrack
@@ -622,6 +654,7 @@ impl BacktrackingCompiler {
 
             // Pattern matched - jump to success path
             dynasm!(self.asm
+                ; .arch x64
                 ; jmp =>iteration_matched
 
                 ; =>iteration_backtrack
@@ -658,6 +691,7 @@ impl BacktrackingCompiler {
 
             // Pattern succeeded - increment counter, continue
             dynasm!(self.asm
+                ; .arch x64
                 ; =>iteration_matched
                 ; inc r15d
                 ; jmp =>loop_start
@@ -674,12 +708,14 @@ impl BacktrackingCompiler {
             if let Some(cap_idx) = self.current_capture {
                 let end_offset = (cap_idx as i32) * 16 + 8;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; mov QWORD [r12 + end_offset], rcx
                 );
             }
 
             // Check if we have enough matches to satisfy minimum
             dynasm!(self.asm
+                ; .arch x64
                 ; cmp r15d, min as i32
                 ; jl =>self.backtrack_label    // Not enough matches, backtrack further
                 // We have enough matches, try to continue with the rest of the pattern
@@ -691,6 +727,7 @@ impl BacktrackingCompiler {
             for _ in 0..min {
                 self.emit_pattern(expr)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r15d
                 );
             }
@@ -701,12 +738,14 @@ impl BacktrackingCompiler {
                 let try_more = self.asm.new_dynamic_label();
 
                 dynasm!(self.asm
+                    ; .arch x64
                     ; =>loop_start
                 );
 
                 // Check max limit
                 if let Some(max_val) = max {
                     dynasm!(self.asm
+                        ; .arch x64
                         ; cmp r15d, max_val as i32
                         ; jge =>loop_done
                     );
@@ -714,6 +753,7 @@ impl BacktrackingCompiler {
 
                 // Push choice point to try matching more later (stack grows UP)
                 dynasm!(self.asm
+                    ; .arch x64
                     ; mov QWORD [rbx], rcx
                     ; lea rax, [=>try_more]
                     ; mov QWORD [rbx + 8], rax
@@ -734,6 +774,7 @@ impl BacktrackingCompiler {
                 // Match one more
                 self.emit_pattern(expr)?;
                 dynasm!(self.asm
+                    ; .arch x64
                     ; inc r15d
                     ; jmp =>loop_start
                 );
@@ -741,6 +782,7 @@ impl BacktrackingCompiler {
         }
 
         dynasm!(self.asm
+            ; .arch x64
             ; =>loop_done
             // Check minimum count
             ; cmp r15d, min as i32
@@ -757,6 +799,7 @@ impl BacktrackingCompiler {
 
         // Record start position
         dynasm!(self.asm
+            ; .arch x64
             ; mov QWORD [r12 + start_offset], rcx
         );
 
@@ -772,6 +815,7 @@ impl BacktrackingCompiler {
 
         // Record end position
         dynasm!(self.asm
+            ; .arch x64
             ; mov QWORD [r12 + end_offset], rcx
         );
 
@@ -786,6 +830,7 @@ impl BacktrackingCompiler {
         let backref_ok = self.asm.new_dynamic_label();
 
         dynasm!(self.asm
+            ; .arch x64
             // Load captured text bounds
             ; mov r8, QWORD [r12 + start_offset]   // r8 = capture_start
             ; mov r9, QWORD [r12 + end_offset]     // r9 = capture_end
@@ -845,6 +890,7 @@ impl BacktrackingCompiler {
             HirAnchor::Start => {
                 // Start of text: position must be 0
                 dynasm!(self.asm
+                    ; .arch x64
                     ; test rcx, rcx
                     ; jnz =>self.backtrack_label
                 );
@@ -852,6 +898,7 @@ impl BacktrackingCompiler {
             HirAnchor::End => {
                 // End of text: position must equal length
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp rcx, rsi
                     ; jne =>self.backtrack_label
                 );
@@ -860,6 +907,7 @@ impl BacktrackingCompiler {
                 // Start of line: position is 0 or preceded by newline
                 let ok = self.asm.new_dynamic_label();
                 dynasm!(self.asm
+                    ; .arch x64
                     ; test rcx, rcx
                     ; jz =>ok
                     ; mov al, BYTE [rdi + rcx - 1]
@@ -872,6 +920,7 @@ impl BacktrackingCompiler {
                 // End of line: at end or followed by newline
                 let ok = self.asm.new_dynamic_label();
                 dynasm!(self.asm
+                    ; .arch x64
                     ; cmp rcx, rsi
                     ; je =>ok
                     ; mov al, BYTE [rdi + rcx]
@@ -903,6 +952,7 @@ impl BacktrackingCompiler {
     /// - `entry + 24`: extra data (count for repetition, unused for others)
     fn emit_backtrack_handler(&mut self) {
         dynasm!(self.asm
+            ; .arch x64
             ; =>self.backtrack_label
 
             // Check if backtrack stack is empty (rbx == bottom means empty)
@@ -934,6 +984,7 @@ impl BacktrackingCompiler {
     fn emit_success_handler(&mut self) {
         let epilogue = self.asm.new_dynamic_label();
         dynasm!(self.asm
+            ; .arch x64
             ; =>self.match_success_label
             // Set group 0 end = current position
             ; mov QWORD [r12 + 8], rcx
@@ -961,6 +1012,7 @@ impl BacktrackingCompiler {
         // Platform-specific epilogue
         #[cfg(target_os = "windows")]
         dynasm!(self.asm
+            ; .arch x64
             ; pop rsi
             ; pop rdi
             ; ret
@@ -968,6 +1020,7 @@ impl BacktrackingCompiler {
 
         #[cfg(not(target_os = "windows"))]
         dynasm!(self.asm
+            ; .arch x64
             ; ret
         );
     }
