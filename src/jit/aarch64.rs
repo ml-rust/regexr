@@ -184,6 +184,7 @@ fn emit_prologue(
     // AAPCS64: Arguments in X0, X1
     // X0 = input ptr, X1 = len
     dynasm!(asm
+        ; .arch aarch64
         ; mov x20, x0              // x20 = input base
         ; add x21, x0, x1          // x21 = input end (base + len)
         ; mov x19, #0              // x19 = position = 0
@@ -194,6 +195,7 @@ fn emit_prologue(
     // For word boundary patterns, initialize x24 = prev_char_class
     if has_word_boundary {
         dynasm!(asm
+            ; .arch aarch64
             ; mov x24, #0             // x24 = 0 (NonWord at start)
         );
     }
@@ -202,6 +204,7 @@ fn emit_prologue(
     if let Some(restart) = restart_label {
         if emit_restart_label {
             dynasm!(asm
+                ; .arch aarch64
                 ; =>restart
             );
         }
@@ -210,12 +213,14 @@ fn emit_prologue(
     // For word boundary secondary entry, set x24 = 1 (Word)
     if dispatch_label.is_some() && !emit_restart_label {
         dynasm!(asm
+            ; .arch aarch64
             ; mov x24, #1             // x24 = 1 (Word)
         );
     }
 
     // Jump to start state
     dynasm!(asm
+        ; .arch aarch64
         ; b =>*start_label
     );
 
@@ -250,6 +255,7 @@ fn emit_dispatch(
         })?;
 
     dynasm!(asm
+        ; .arch aarch64
         ; .align 4
         ; =>dispatch_label
         // Check x24: 0 = NonWord, 1 = Word
@@ -347,6 +353,7 @@ fn emit_state(
 
     // Align for optimal instruction fetch
     dynasm!(asm
+        ; .arch aarch64
         ; .align 4
         ; =>*state_label
     );
@@ -356,16 +363,19 @@ fn emit_state(
     if state.is_match {
         // Save current position as last match
         dynasm!(asm
+            ; .arch aarch64
             ; mov x22, x19
         );
         // Check if exhausted
         dynasm!(asm
+            ; .arch aarch64
             ; add x9, x20, x19         // x9 = base + pos
             ; cmp x9, x21
             ; b.hs =>match_return
         );
     } else {
         dynasm!(asm
+            ; .arch aarch64
             ; add x9, x20, x19
             ; cmp x9, x21
             ; b.hs =>no_match_label
@@ -386,6 +396,7 @@ fn emit_state(
     } else {
         // Load next byte and increment position
         dynasm!(asm
+            ; .arch aarch64
             ; ldrb w9, [x20, x19]      // w9 = input[pos]
             ; add x19, x19, #1         // pos++
         );
@@ -401,6 +412,7 @@ fn emit_state(
     // Match return label
     if state.is_match {
         dynasm!(asm
+            ; .arch aarch64
             ; =>match_return
             ; b =>no_match_label
         );
@@ -445,6 +457,7 @@ fn emit_fast_forward_loop(
 
         // Embed bitmap data
         dynasm!(asm
+            ; .arch aarch64
             ; b =>start_label
             ; .align 8
             ; =>bitmap_label
@@ -454,11 +467,13 @@ fn emit_fast_forward_loop(
 
         // Load bitmap address into x10
         dynasm!(asm
+            ; .arch aarch64
             ; adr x10, =>bitmap_label
         );
 
         // Fast-forward loop with bitmap
         dynasm!(asm
+            ; .arch aarch64
             ; =>fast_forward_loop
             // Check bounds
             ; add x9, x20, x19
@@ -480,16 +495,19 @@ fn emit_fast_forward_loop(
 
         if state.is_match {
             dynasm!(asm
+                ; .arch aarch64
                 ; mov x22, x19
             );
         }
 
         dynasm!(asm
+            ; .arch aarch64
             ; b =>fast_forward_loop
         );
     } else {
         // Range-based fast forward
         dynasm!(asm
+            ; .arch aarch64
             ; =>fast_forward_loop
             // Check bounds
             ; add x9, x20, x19
@@ -503,12 +521,14 @@ fn emit_fast_forward_loop(
         for (i, &(start, end)) in self_loop_ranges.iter().enumerate() {
             if start == end {
                 dynasm!(asm
+                    ; .arch aarch64
                     ; cmp w9, #start as u32
                     ; b.eq =>consume_byte
                 );
             } else {
                 let next_range = asm.new_dynamic_label();
                 dynasm!(asm
+                    ; .arch aarch64
                     ; cmp w9, #start as u32
                     ; b.lo =>next_range
                     ; cmp w9, #end as u32
@@ -519,6 +539,7 @@ fn emit_fast_forward_loop(
 
             if i == self_loop_ranges.len() - 1 {
                 dynasm!(asm
+                    ; .arch aarch64
                     ; b =>check_other
                 );
             }
@@ -526,35 +547,41 @@ fn emit_fast_forward_loop(
 
         // Consume byte
         dynasm!(asm
+            ; .arch aarch64
             ; =>consume_byte
             ; add x19, x19, #1
         );
 
         if state.is_match {
             dynasm!(asm
+                ; .arch aarch64
                 ; mov x22, x19
             );
         }
 
         dynasm!(asm
+            ; .arch aarch64
             ; b =>fast_forward_loop
         );
     }
 
     // Exhausted - jump to no_match which will check x22
     dynasm!(asm
+        ; .arch aarch64
         ; =>exhausted
         ; b =>no_match_label
     );
 
     // Check other transitions
     dynasm!(asm
+        ; .arch aarch64
         ; =>check_other
     );
 
     if !other_transitions.is_empty() {
         // Reload byte and consume
         dynasm!(asm
+            ; .arch aarch64
             ; ldrb w9, [x20, x19]
             ; add x19, x19, #1
         );
@@ -572,12 +599,14 @@ fn emit_fast_forward_loop(
 
             if start == end {
                 dynasm!(asm
+                    ; .arch aarch64
                     ; cmp w9, #start as u32
                     ; b.eq =>*target_label
                 );
             } else {
                 let next = asm.new_dynamic_label();
                 dynasm!(asm
+                    ; .arch aarch64
                     ; cmp w9, #start as u32
                     ; b.lo =>next
                     ; cmp w9, #end as u32
@@ -590,6 +619,7 @@ fn emit_fast_forward_loop(
 
     // No transition matched
     dynasm!(asm
+        ; .arch aarch64
         ; b =>dead_label
     );
 
@@ -618,12 +648,14 @@ fn emit_sparse_transitions(
 
         if start == end {
             dynasm!(asm
+                ; .arch aarch64
                 ; cmp w9, #start as u32
                 ; b.eq =>*target_label
             );
         } else {
             let next_check = asm.new_dynamic_label();
             dynasm!(asm
+                ; .arch aarch64
                 ; cmp w9, #start as u32
                 ; b.lo =>next_check
                 ; cmp w9, #end as u32
@@ -635,6 +667,7 @@ fn emit_sparse_transitions(
 
     // No transition matched
     dynasm!(asm
+        ; .arch aarch64
         ; b =>dead_label
     );
 
@@ -663,12 +696,14 @@ fn emit_dense_transitions(
 
         if start == end {
             dynasm!(asm
+                ; .arch aarch64
                 ; cmp w9, #start as u32
                 ; b.eq =>*target_label
             );
         } else {
             let next = asm.new_dynamic_label();
             dynasm!(asm
+                ; .arch aarch64
                 ; cmp w9, #start as u32
                 ; b.lo =>next
                 ; cmp w9, #end as u32
@@ -679,6 +714,7 @@ fn emit_dense_transitions(
     }
 
     dynasm!(asm
+        ; .arch aarch64
         ; b =>dead_label
     );
 
@@ -728,6 +764,7 @@ fn emit_dead_state(
     has_word_boundary: bool,
 ) -> Result<()> {
     dynasm!(asm
+        ; .arch aarch64
         ; .align 4
         ; =>dead_label
     );
@@ -735,6 +772,7 @@ fn emit_dead_state(
     if let Some(restart) = restart_label {
         // Check if we already have a match
         dynasm!(asm
+            ; .arch aarch64
             ; cmp x22, #0
             ; b.ge =>no_match_label
             // Advance search position
@@ -753,6 +791,7 @@ fn emit_dead_state(
 
                 // Classify byte at position (x23 - 1)
                 dynasm!(asm
+                    ; .arch aarch64
                     ; sub x9, x23, #1
                     ; ldrb w9, [x20, x9]
                     ; mov x24, #0              // Assume NonWord
@@ -788,17 +827,20 @@ fn emit_dead_state(
                 );
             } else {
                 dynasm!(asm
+                    ; .arch aarch64
                     ; b =>restart
                 );
             }
         } else {
             dynasm!(asm
+                ; .arch aarch64
                 ; b =>restart
             );
         }
     } else {
         // Anchored: no retry
         dynasm!(asm
+            ; .arch aarch64
             ; b =>no_match_label
         );
     }
@@ -816,6 +858,7 @@ fn emit_no_match(
     let return_match = asm.new_dynamic_label();
 
     dynasm!(asm
+        ; .arch aarch64
         ; =>no_match_label
         // Check if we have a saved match
         ; cmp x22, #0
