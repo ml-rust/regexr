@@ -53,6 +53,7 @@ use dynasmrt::x64::Assembler;
 #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
 pub fn emit_abi_prologue(asm: &mut Assembler) {
     dynasm!(asm
+        ; .arch x64
         // Windows x64: args come in RCX, RDX
         // RDI and RSI are callee-saved on Windows, so we must preserve them
         ; push rdi
@@ -82,6 +83,7 @@ pub fn emit_abi_prologue(asm: &mut Assembler) {
 #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
 pub fn emit_abi_epilogue(asm: &mut Assembler) {
     dynasm!(asm
+        ; .arch x64
         // Restore callee-saved registers
         ; pop rsi
         ; pop rdi
@@ -104,6 +106,7 @@ pub fn emit_abi_epilogue(asm: &mut Assembler) {
 #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
 pub fn emit_abi_prologue_with_r13(asm: &mut Assembler) {
     dynasm!(asm
+        ; .arch x64
         // Windows x64: RDI, RSI, R13 all need saving
         ; push rdi
         ; push rsi
@@ -118,6 +121,7 @@ pub fn emit_abi_prologue_with_r13(asm: &mut Assembler) {
 #[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 pub fn emit_abi_prologue_with_r13(asm: &mut Assembler) {
     dynasm!(asm
+        ; .arch x64
         // System V: only R13 needs saving (callee-saved)
         ; push r13
     );
@@ -127,6 +131,7 @@ pub fn emit_abi_prologue_with_r13(asm: &mut Assembler) {
 #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
 pub fn emit_abi_epilogue_with_r13(asm: &mut Assembler) {
     dynasm!(asm
+        ; .arch x64
         ; pop r13
         ; pop rsi
         ; pop rdi
@@ -137,6 +142,7 @@ pub fn emit_abi_epilogue_with_r13(asm: &mut Assembler) {
 #[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 pub fn emit_abi_epilogue_with_r13(asm: &mut Assembler) {
     dynasm!(asm
+        ; .arch x64
         ; pop r13
     );
 }
