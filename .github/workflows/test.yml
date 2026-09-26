@@ -100,7 +100,7 @@ jobs:
           prefix-key: test-${{ matrix.os }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
         with:
           tool: nextest
 
@@ -137,7 +137,7 @@ jobs:
           prefix-key: feature-matrix
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
         with:
           tool: nextest
 
@@ -194,7 +194,7 @@ jobs:
           prefix-key: jit-${{ matrix.os }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
         with:
           tool: nextest
 
@@ -363,7 +363,7 @@ jobs:
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
         with:
           tool: cargo-deny
 
