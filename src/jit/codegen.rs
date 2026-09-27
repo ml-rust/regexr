@@ -15,11 +15,12 @@
 use crate::dfa::{CacheCeilingExceeded, CharClass, DfaStateId, LazyDfa};
 use crate::error::{Error, ErrorKind, Result};
 use crate::hash::FxHashSet;
+use crate::nfa::Nfa;
 use dynasmrt::{AssemblyOffset, ExecutableBuffer};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 
-/// How much input the per-candidate retries in
-/// [`CompiledRegex::execute_unanchored_validated`] may walk in total before the
+/// How much input the per-start retries in
+/// [`CompiledRegex::search_unanchored`] may walk in total before the
 /// interpreter takes over. Matches the lazy DFA's and Shift-Or's rule.
 const SCAN_BUDGET_FACTOR: usize = 4;
 
@@ -76,25 +77,37 @@ pub struct CompiledRegex {
     pub(crate) match_needs_end_of_text: bool,
     /// Whether any match state requires EndOfLine assertion.
     pub(crate) match_needs_end_of_line: bool,
-    /// The DFA this code was generated from, kept only for patterns that need
-    /// [`CompiledRegex::execute_unanchored_validated`].
+    /// The NFA the code was generated from, for unanchored patterns only.
     ///
-    /// The generated code reports one candidate per scan, so a candidate whose
-    /// end fails its assertion has to be retried from the next position — one
-    /// full scan per start, which is quadratic over an input where every start
-    /// produces a failing candidate. The interpreter covers every start in a
-    /// single pass, so it takes over once the retries have proven expensive.
-    dfa_fallback: Option<Mutex<LazyDfa>>,
+    /// The generated code stops at the first attempt that reaches the end of
+    /// the input, and a candidate whose end fails its assertion is rejected
+    /// after the scan. Both leave later starts unexamined, and resuming from
+    /// the next start costs one scan per start. That is quadratic when every
+    /// attempt runs long. The interpreter covers every start in a single pass,
+    /// so [`CompiledRegex::search_unanchored`] hands over to it once the
+    /// retries have proven expensive.
+    fallback_nfa: Option<Arc<Nfa>>,
+    /// The interpreter built from `fallback_nfa`, created on first use.
+    dfa_fallback: OnceLock<Mutex<LazyDfa>>,
+}
+
+/// What one call into the generated code established.
+enum Scan {
+    /// A match, as offsets into the scanned slice. Its end is not yet
+    /// checked against the stripped end assertions.
+    Found(usize, usize),
+    /// No match starts before `resume` in the scanned slice. Starts from
+    /// `resume` on were not examined.
+    Stopped { resume: usize },
 }
 
 impl CompiledRegex {
-    /// Executes the compiled regex on the given input with a specific prev_class.
+    /// Runs the generated code once over `input`.
     ///
-    /// Returns the end position of the match if found, or None.
-    /// Executes the JIT-compiled regex and returns (start, end) positions.
-    ///
-    /// For unanchored patterns, the JIT code scans through the input internally,
-    /// so a single call finds the first match anywhere in the input.
+    /// For an unanchored pattern the code restarts internally at each start
+    /// whose attempt dies. It stops at the first match, or at the first
+    /// attempt that reaches the end of `input` without one, since that
+    /// attempt cannot tell whether a later start matches.
     ///
     /// # Arguments
     /// * `input` - The input bytes to match against
@@ -104,9 +117,10 @@ impl CompiledRegex {
     /// This method calls JIT-compiled machine code. The code is generated
     /// to be safe, but it's marked unsafe because it executes dynamically
     /// generated code.
-    fn raw_match(&self, input: &[u8], prev_class: CharClass) -> Option<(usize, usize)> {
+    fn raw_scan(&self, input: &[u8], prev_class: CharClass) -> Scan {
         // Function signature: fn(input_ptr: *const u8, len: usize) -> i64
-        // Returns: packed (start << 32 | end) or -1 for no match
+        // Returns: packed (start << 32 | end), or -(start + 2) where `start`
+        // is the last start the code attempted without reaching a verdict.
         type MatchFn = unsafe extern "C" fn(*const u8, usize) -> i64;
 
         // Select the correct entry point based on prev_class
@@ -125,23 +139,39 @@ impl CompiledRegex {
             let packed = result as u64;
             let start_pos = (packed >> 32) as usize;
             let end_pos = (packed & 0xFFFF_FFFF) as usize;
-            Some((start_pos, end_pos))
+            Scan::Found(start_pos, end_pos)
         } else {
-            None
+            let last_start = result
+                .checked_add(2)
+                .map_or(0, |r| r.unsigned_abs() as usize);
+            Scan::Stopped {
+                resume: last_start.saturating_add(1),
+            }
         }
     }
 
-    /// Executes the JIT machine code over `input`, returning the leftmost match
-    /// (with greedy end) WITHOUT validating end assertions. The end-of-text /
-    /// end-of-line / word-boundary assertions are stripped from the DFA, so the
-    /// raw result must still be checked by `validate_end_assertions`.
+    /// The character class before `pos`, as the generated code expects it.
     #[inline]
-    fn execute_with_class(&self, input: &[u8], prev_class: CharClass) -> Option<(usize, usize)> {
-        let (start_pos, end_pos) = self.raw_match(input, prev_class)?;
-        if !self.validate_end_assertions(input, start_pos, end_pos, prev_class) {
-            return None;
+    fn prev_class_at(&self, input: &[u8], pos: usize) -> CharClass {
+        if self.has_word_boundary && pos > 0 {
+            CharClass::from_byte(input[pos - 1])
+        } else {
+            CharClass::NonWord
         }
-        Some((start_pos, end_pos))
+    }
+
+    /// One attempt of an anchored pattern at the start of `input`, with the
+    /// end assertions checked.
+    #[inline]
+    fn execute_anchored(&self, input: &[u8], prev_class: CharClass) -> Option<(usize, usize)> {
+        match self.raw_scan(input, prev_class) {
+            Scan::Found(start, end)
+                if self.validate_end_assertions(input, start, end, prev_class) =>
+            {
+                Some((start, end))
+            }
+            _ => None,
+        }
     }
 
     /// Whether a matched candidate can be rejected by `validate_end_assertions`.
@@ -155,22 +185,25 @@ impl CompiledRegex {
                 && (self.match_needs_word_boundary || self.match_needs_not_word_boundary))
     }
 
-    /// Unanchored search that correctly handles post-validated assertions
-    /// (`$`/`\Z`, end-of-line, word boundaries).
+    /// Leftmost match of an unanchored pattern starting at or after
+    /// `start_from`.
     ///
-    /// The JIT strips these zero-width assertions from the DFA and validates them
-    /// after the fact. A single scan returns the leftmost match with a greedy end;
-    /// if that candidate fails its end assertion (e.g. `x?$` matches empty at the
-    /// leftmost position, but `$` does not hold there), we must continue scanning
-    /// from the next start position rather than giving up. This iterates start
-    /// positions from `from`, taking the JIT's match at each, until one satisfies
-    /// the assertion. For end anchors this is complete: `$` only holds at
-    /// end-of-text or before a final `\n`, so the greedy end is the sole
-    /// `$`-satisfying candidate at any start (no shorter end can satisfy it).
-    fn execute_unanchored_validated(
+    /// One scan of the generated code can stop short of an answer in two
+    /// ways. An attempt can reach the end of the input without a match, and
+    /// the code then stops rather than try later starts: `a(?:ab)?b` on "aab"
+    /// runs off the end from 0, and the match starts at 1. When `validate` is
+    /// set, a candidate can also fail an end assertion the DFA stripped
+    /// (`x?$` on "abc" matches empty at 0, where `$` does not hold). Either
+    /// way the search resumes at the next unexamined start.
+    ///
+    /// For end anchors one candidate per start is complete: `$` holds only at
+    /// the end of the text or before a final `\n`, so no shorter end can
+    /// satisfy it where the greedy end fails.
+    fn search_unanchored(
         &self,
         input: &[u8],
         start_from: usize,
+        validate: bool,
     ) -> Option<(usize, usize)> {
         let budget = input.len().saturating_mul(SCAN_BUDGET_FACTOR);
         let mut walked = 0usize;
@@ -181,26 +214,29 @@ impl CompiledRegex {
         // on its own — the fallback is only ever a shortcut.
         let mut fallback_gave_up = false;
         loop {
-            let prev_class = if self.has_word_boundary && from > 0 {
-                CharClass::from_byte(input[from - 1])
-            } else {
-                CharClass::NonWord
+            let prev_class = self.prev_class_at(input, from);
+            let next = match self.raw_scan(&input[from..], prev_class) {
+                Scan::Found(rel_start, rel_end) => {
+                    let start = from + rel_start;
+                    let end = from + rel_end;
+                    if !validate || self.validate_end_assertions(input, start, end, prev_class) {
+                        return Some((start, end));
+                    }
+                    walked += end - from;
+                    start + 1
+                }
+                Scan::Stopped { resume } => {
+                    walked += input.len() - from;
+                    from.saturating_add(resume)
+                }
             };
-            let (rel_start, rel_end) = self.raw_match(&input[from..], prev_class)?;
-            let start = from + rel_start;
-            let end = from + rel_end;
-            if self.validate_end_assertions(input, start, end, prev_class) {
-                return Some((start, end));
-            }
-            // This start's candidate failed its end assertion; advance past it.
-            let next = start + 1;
             if next > input.len() {
                 return None;
             }
-            walked += end - from;
             if walked > budget && !fallback_gave_up {
-                if let Some(dfa) = &self.dfa_fallback {
-                    match dfa.lock().unwrap().find_from(input, next) {
+                if let Some(dfa) = self.fallback() {
+                    let mut dfa = dfa.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    match dfa.find_from(input, next) {
                         Ok(found) => return found,
                         // Its transition table is incomplete past the ceiling, so
                         // its answer would be a false negative rather than a real
@@ -211,6 +247,16 @@ impl CompiledRegex {
             }
             from = next;
         }
+    }
+
+    /// The interpreter that takes over an expensive unanchored search, built
+    /// on first use.
+    fn fallback(&self) -> Option<&Mutex<LazyDfa>> {
+        let nfa = self.fallback_nfa.as_ref()?;
+        Some(
+            self.dfa_fallback
+                .get_or_init(|| Mutex::new(LazyDfa::new(Nfa::clone(nfa)))),
+        )
     }
 
     /// Validates that end assertions (word boundaries and anchors) are satisfied.
@@ -283,7 +329,11 @@ impl CompiledRegex {
     ///
     /// Returns (start, end) of the match if found, or None.
     pub fn execute(&self, input: &[u8]) -> Option<(usize, usize)> {
-        self.execute_with_class(input, CharClass::NonWord)
+        if self.has_start_anchor {
+            self.execute_anchored(input, CharClass::NonWord)
+        } else {
+            self.search_unanchored(input, 0, self.has_post_validated_assertions())
+        }
     }
 
     /// Returns true if the regex matches anywhere in the input (unanchored).
@@ -347,18 +397,7 @@ impl CompiledRegex {
             } else {
                 None
             }
-        } else if self.has_post_validated_assertions() {
-            // Unanchored patterns whose match end can be rejected by a stripped
-            // assertion (`$`/`\Z`, end-of-line, word boundary): a single scan may
-            // return a leftmost candidate that fails the assertion while a later
-            // start succeeds (e.g. `x?$` on "abc" → empty match at the end). Scan
-            // start positions, validating each candidate.
-            self.execute_unanchored_validated(input, start_from)
         } else {
-            // Unanchored patterns with no post-validated assertion: the JIT's
-            // single internal scan returns the correct leftmost match directly.
-            // `find_at` is that same single scan, entered at `start_from` with the
-            // preceding character class supplied.
             self.find_at(input, start_from)
         }
     }
@@ -373,30 +412,26 @@ impl CompiledRegex {
             return None;
         }
 
-        // For anchored patterns, verify the start position is valid
-        if self.has_start_anchor {
-            let valid_start = if self.has_multiline_start_anchor {
-                // Multiline: valid at position 0 or after newline
-                crate::nfa::at_line_start(input, start_pos)
-            } else {
-                // Non-multiline: only valid at position 0
-                start_pos == 0
-            };
-            if !valid_start {
-                return None;
-            }
+        if !self.has_start_anchor {
+            return self.search_unanchored(input, start_pos, self.has_post_validated_assertions());
         }
 
-        // Determine prev_class based on the character before start_pos
-        let prev_class = if self.has_word_boundary && start_pos > 0 {
-            CharClass::from_byte(input[start_pos - 1])
+        // An anchored pattern gets one attempt, at a valid start only.
+        let valid_start = if self.has_multiline_start_anchor {
+            // Multiline: valid at position 0 or after newline
+            crate::nfa::at_line_start(input, start_pos)
         } else {
-            CharClass::NonWord
+            // Non-multiline: only valid at position 0
+            start_pos == 0
         };
+        if !valid_start {
+            return None;
+        }
 
         // Execute on the slice starting at start_pos
         // The JIT returns positions relative to the slice, which we then adjust
-        self.execute_with_class(&input[start_pos..], prev_class)
+        let prev_class = self.prev_class_at(input, start_pos);
+        self.execute_anchored(&input[start_pos..], prev_class)
             .map(|(rel_start, rel_end)| (start_pos + rel_start, start_pos + rel_end))
     }
 }
@@ -511,12 +546,13 @@ impl JitCompiler {
             has_multiline_start_anchor: materialized.has_multiline_start_anchor,
             match_needs_end_of_text,
             match_needs_end_of_line,
-            dfa_fallback: None,
+            fallback_nfa: None,
+            dfa_fallback: OnceLock::new(),
         };
 
         // Only the retry loop needs it, and only unanchored patterns reach that.
-        if !compiled.has_start_anchor && compiled.has_post_validated_assertions() {
-            compiled.dfa_fallback = Some(Mutex::new(dfa.clone()));
+        if !compiled.has_start_anchor {
+            compiled.fallback_nfa = Some(dfa.nfa_arc());
         }
 
         Ok(compiled)

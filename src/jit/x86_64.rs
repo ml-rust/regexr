@@ -1034,7 +1034,7 @@ fn emit_dead_state(
 ///
 /// Checks if we had any successful match (r10 >= 0).
 /// If yes, returns the match as a packed value: (start << 32) | end.
-/// Otherwise, returns -1 to indicate no match.
+/// Otherwise, returns -(r11 + 2): no match starts before r11.
 ///
 /// The start position is tracked in r11 (updated on each restart for unanchored search).
 ///
@@ -1083,8 +1083,12 @@ fn emit_no_match(
         ; .arch x64
         ; ret
         ; truly_no_match:
-        // No match at all
-        ; mov rax, -1i32 as _
+        // No match from any start before r11, and none decided at r11: the
+        // attempt there reached the end of the input, or r11 is past the last
+        // start. Return -(r11 + 2) so the caller can resume at r11 + 1.
+        ; mov rax, r11
+        ; not rax
+        ; dec rax
     );
 
     // Restore callee-saved registers before returning

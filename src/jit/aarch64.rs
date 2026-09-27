@@ -880,7 +880,10 @@ fn emit_no_match(
         ; b =>return_match
 
         ; =>truly_no_match
-        ; movn x0, 0
+        // No match starts before x23, and none was decided at x23. Return
+        // -(x23 + 2) so the caller can resume at x23 + 1.
+        ; mvn x0, x23
+        ; sub x0, x0, #1
 
         ; =>return_match
         // Restore callee-saved registers
