@@ -102,13 +102,12 @@ impl HirTranslator {
             ));
         }
 
-        // Only use CodepointClassMatcher if the pattern is a single character class
-        // (no quantifiers, no concatenation, no alternation at the top level).
-        // Check that the expression is a Class or an Alt of byte sequences.
+        // CodepointClassMatcher runs only when the whole pattern is one bracket
+        // class. That is decided on the AST: the HIR of `[sS]|[sS][eE][cC]` has
+        // the same shape as the UTF-8 lowering of a single class, and
+        // `current_class_codepoints` holds only the last class translated.
         if let Some((ranges, negated)) = self.current_class_codepoints.take() {
-            // Only use codepoint_class if the root expression looks like a char class
-            let is_simple_class = Self::is_simple_unicode_class(&expr);
-            if is_simple_class {
+            if is_single_class(&ast.expr) && Self::is_simple_unicode_class(&expr) {
                 self.props.codepoint_class = Some(CodepointClass::new(ranges, negated));
             }
         }
@@ -1147,6 +1146,23 @@ const MAX_TRIE_SEQUENCES: usize = 64;
 /// the backtracker, which cannot execute a codepoint node at all — so a
 /// backreference anywhere makes byte lowering mandatory, whatever else the
 /// pattern contains.
+/// Whether the pattern is exactly one bracket class, allowing non-capturing
+/// and flag-scoping groups around it. A capturing group is excluded because
+/// the codepoint-class matcher reports group 0 only.
+fn is_single_class(expr: &Expr) -> bool {
+    match expr {
+        Expr::Class(_) => true,
+        Expr::Group(group) => {
+            matches!(group.kind, GroupKind::NonCapturing | GroupKind::Flagged(_))
+                && is_single_class(&group.expr)
+        }
+        Expr::Concat(exprs) | Expr::Alt(exprs) => {
+            exprs.len() == 1 && exprs.iter().all(is_single_class)
+        }
+        _ => false,
+    }
+}
+
 fn pins_codepoint_engine(expr: &Expr) -> bool {
     !contains_backref(expr) && pins_without_backref(expr)
 }
