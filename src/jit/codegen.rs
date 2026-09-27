@@ -21,9 +21,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 // How much input the per-start retries in `CompiledRegex::search_unanchored`
 // may walk in total before the interpreter takes over: the lazy DFA's and
-// Shift-Or's factor, which the generated code also uses for its internal
-// restarts.
-use crate::dfa::lazy::shared::SCAN_BUDGET_FACTOR;
+// Shift-Or's budget, sized from the input left after the resume offset so
+// `find_iter` stays linear.
+use crate::dfa::lazy::shared::scan_budget;
 
 /// Largest DFA the ARM64 emitter will take, bounded by branch displacement and
 /// code size rather than by anything about the pattern.
@@ -206,7 +206,7 @@ impl CompiledRegex {
         start_from: usize,
         validate: bool,
     ) -> Option<(usize, usize)> {
-        let budget = input.len().saturating_mul(SCAN_BUDGET_FACTOR);
+        let budget = scan_budget(input.len(), start_from, None);
         let mut walked = 0usize;
         let mut from = start_from;
         loop {
