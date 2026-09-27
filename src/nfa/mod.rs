@@ -13,16 +13,20 @@
 //! - Non-greedy quantifiers
 //! - Complex capture groups with liveness-optimized copying
 
+mod assertions;
 mod glushkov;
+mod priority;
 mod state;
 pub mod tagged;
 mod thompson;
 pub mod utf8_automata;
 
+pub use assertions::assertions_at_edges;
 pub use glushkov::{
     compile_glushkov, compile_glushkov_wide, BitSet256, BitSet256Iter, ByteSet, GlushkovNfa,
     GlushkovWideNfa, MAX_POSITIONS, MAX_POSITIONS_WIDE,
 };
+pub use priority::priority_is_irrelevant;
 pub use state::*;
 pub use thompson::*;
 

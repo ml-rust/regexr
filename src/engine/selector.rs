@@ -173,6 +173,33 @@ pub fn hir_has_alternation(expr: &HirExpr) -> bool {
     }
 }
 
+/// Whether the DFA family and Shift-Or report the PikeVM's match for every
+/// haystack.
+///
+/// Two properties are proven on the Thompson NFA:
+/// - Priority cannot move the end ([`crate::nfa::priority_is_irrelevant`]).
+///   Branch order is not the only priority: a greedy repeat prefers one more
+///   iteration, so `a?(?:ab)?` on "ab" is `a`, while those engines report the
+///   longest match `ab`.
+/// - Every assertion sits at an edge of the match
+///   ([`crate::nfa::assertions_at_edges`]). Those engines check assertions
+///   from the start context or at the match end, so `a$a` and `a\ba?` are
+///   beyond them.
+///
+/// A pattern the NFA builder rejects answers `false`, which keeps it on the
+/// PikeVM.
+pub fn automata_match_like_pikevm(hir: &Hir) -> bool {
+    match crate::nfa::compile(hir) {
+        Ok(nfa) => nfa_automata_match_like_pikevm(&nfa),
+        Err(_) => false,
+    }
+}
+
+/// [`automata_match_like_pikevm`] for an NFA already built.
+fn nfa_automata_match_like_pikevm(nfa: &Nfa) -> bool {
+    crate::nfa::priority_is_irrelevant(nfa) && crate::nfa::assertions_at_edges(nfa)
+}
+
 /// The selected engine type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineType {
@@ -204,6 +231,12 @@ pub fn select_engine(nfa: &Nfa) -> EngineType {
     }
     // Lookarounds require PikeVM
     if nfa.has_lookaround {
+        return EngineType::PikeVm;
+    }
+
+    // The lazy DFA reports the longest match and checks assertions only at
+    // the edges of a match.
+    if !nfa_automata_match_like_pikevm(nfa) {
         return EngineType::PikeVm;
     }
 
@@ -262,6 +295,13 @@ pub fn select_engine_from_hir(hir: &Hir) -> EngineType {
     // Alternations need leftmost-first branch priority, which DFA/Shift-Or cannot
     // express (see `hir_has_alternation`). Route them to the ordered PikeVM.
     if hir_has_alternation(&hir.expr) {
+        return EngineType::PikeVm;
+    }
+
+    // Every engine below reports the longest match from the leftmost start and
+    // checks assertions only at the edges of a match (see
+    // `automata_match_like_pikevm`).
+    if !automata_match_like_pikevm(hir) {
         return EngineType::PikeVm;
     }
 
@@ -425,7 +465,9 @@ mod tests {
         assert_eq!(get_engine_from_hir(r"\bthe\b"), EngineType::LazyDfa);
         assert_eq!(get_engine_from_hir(r"\bword\b"), EngineType::LazyDfa);
         assert_eq!(get_engine_from_hir(r"\b\d+\b"), EngineType::LazyDfa);
-        assert_eq!(get_engine_from_hir(r"a\Bb"), EngineType::LazyDfa);
+        // A boundary between two consuming parts needs positional evaluation.
+        assert_eq!(get_engine_from_hir(r"a\Bb"), EngineType::PikeVm);
+        assert_eq!(get_engine_from_hir(r"a{1,2}\Ba"), EngineType::PikeVm);
 
         // Long patterns with word boundaries should use LazyDFA
         let long_pattern = format!(r"\b{}\b", "a".repeat(100));

@@ -102,10 +102,6 @@ pub(crate) type FxHashMap<K, V> = std::collections::HashMap<K, V, FxBuildHasher>
 
 /// A `HashSet` over dense internal integers (or structures built from them),
 /// hashed with [`FxHasher`] instead of the default SipHash.
-///
-/// Only the JIT's DFA materialization walk needs it, so it is gated to keep a
-/// `--no-default-features` build free of dead-code warnings.
-#[cfg(feature = "jit")]
 pub(crate) type FxHashSet<K> = std::collections::HashSet<K, FxBuildHasher>;
 
 #[cfg(test)]

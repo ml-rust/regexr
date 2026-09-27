@@ -1692,6 +1692,14 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
         return compile_with_pikevm(hir);
     }
 
+    // Repetition priority can end a match early in the same way (`a?(?:ab)?`
+    // on "ab" is `a`), and an assertion between consuming parts (`a$a`) needs
+    // positional evaluation. Every engine below reports the longest match and
+    // checks assertions only at the edges.
+    if !crate::engine::selector::automata_match_like_pikevm(hir) {
+        return compile_with_pikevm(hir);
+    }
+
     // An alternation — including the one a negated class lowers to — belongs on
     // the DFA rather than Shift-Or, whose step walks the live positions and so
     // costs more the more branches there are. `select_engine_from_hir` already
