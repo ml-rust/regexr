@@ -61,13 +61,9 @@ impl ThreadWorklist {
     pub fn clear(&mut self) {
         self.count = 0;
         // Clear visited bitmap
-        for word in &mut self.visited {
-            *word = 0;
-        }
+        self.visited.fill(0);
         // Reset captures to -1
-        for slot in &mut self.captures {
-            *slot = -1;
-        }
+        self.captures.fill(-1);
     }
 
     /// Checks if a state has been visited.
@@ -212,12 +208,8 @@ impl LookaroundCache {
     /// Clears the cache for reuse.
     #[allow(dead_code)]
     pub fn clear(&mut self) {
-        for word in &mut self.results {
-            *word = 0;
-        }
-        for word in &mut self.computed {
-            *word = 0;
-        }
+        self.results.fill(0);
+        self.computed.fill(0);
     }
 }
 
@@ -271,9 +263,7 @@ impl TaggedNfaContext {
     pub fn reset(&mut self) {
         self.current.clear();
         self.next.clear();
-        for slot in &mut self.best_captures {
-            *slot = -1;
-        }
+        self.best_captures.fill(-1);
         self.best_end = -1;
         self.best_priority = 0;
         self.lookaround_cache.clear();
