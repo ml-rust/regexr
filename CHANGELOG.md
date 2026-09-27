@@ -12,10 +12,13 @@ Each release must have a non-empty section here before it can be tagged — `.gi
 - The DFA engines and Shift-Or returned the longest match where a greedy repeat sets leftmost-first priority: `a?(?:ab)?` on `ab` matched `ab`, not `a`.
 - The JIT-compiled DFA gave up at the first start whose attempt reached the end of the input: `a(?:ab)?b` found no match in `aab`.
 - `^`, `$`, `\b` and `\B` inside a match, stacked, or on an optional path were misjudged by the DFA engines and Shift-Or: `a$a` matched `aa`.
+- A search whose attempts each scanned far before failing took time quadratic in the input on the DFA, Shift-Or and tagged-NFA engines: `(?s)a.*b` over 50 KB of `a` took seconds.
 
 ### Changed
 
 - Patterns whose match priority or assertion placement the DFA engines cannot honour run on the PikeVM.
+- `EagerDfa::find_from_simple` returns `Result`, reporting a search that gives up on its scan budget as `find_from` does.
+- With the JIT enabled, a tagged-NFA pattern that repeats without bound runs on the interpreter, whose search is metered.
 
 ## [0.5.0] - 2026-08-14
 
