@@ -46,5 +46,6 @@ mod onepass_captures;
 mod pattern_rejection;
 mod posix_class;
 mod quoting;
+mod regex_crate_differential;
 mod syntax;
 mod word_boundary;
