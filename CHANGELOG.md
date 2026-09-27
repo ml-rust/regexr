@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on 
 
 Each release must have a non-empty section here before it can be tagged — `.github/workflows/release-validate.yml` refuses a tag whose version has no entry, and the GitHub Release body is this file's section for that version.
 
+## [Unreleased]
+
+### Fixed
+
+- An alternation of classes or class sequences, like `[sS]|[sS][eE][cC]`, ran as its last class alone and found the wrong match or none.
+- The DFA engines and Shift-Or returned the longest match where a greedy repeat sets leftmost-first priority: `a?(?:ab)?` on `ab` matched `ab`, not `a`.
+- The JIT-compiled DFA gave up at the first start whose attempt reached the end of the input: `a(?:ab)?b` found no match in `aab`.
+- `^`, `$`, `\b` and `\B` inside a match, stacked, or on an optional path were misjudged by the DFA engines and Shift-Or: `a$a` matched `aa`.
+
+### Changed
+
+- Patterns whose match priority or assertion placement the DFA engines cannot honour run on the PikeVM.
+
 ## [0.5.0] - 2026-08-14
 
 ### Fixed
