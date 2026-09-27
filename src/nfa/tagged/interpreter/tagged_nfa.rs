@@ -4,6 +4,7 @@
 //! It provides the same algorithm as the JIT but interpreted.
 
 use crate::nfa::tagged::shared::PatternStep;
+use crate::vm::PikeVm;
 
 /// Fast step-based Tagged NFA matcher.
 ///
@@ -11,6 +12,96 @@ use crate::nfa::tagged::shared::PatternStep;
 /// This is faster than Thompson NFA simulation for patterns that can
 /// be expressed as a linear sequence of steps.
 pub struct TaggedNfa;
+
+/// How many units of work a metered search may spend per byte of the input
+/// left to search, before its caller re-runs the search on the PikeVM.
+///
+/// Retrying every start and backtracking every greedy run is cheap when
+/// attempts fail near where they began, and quadratic or worse when they do
+/// not: `\p{L}+a\p{L}*z` over a long run of letters re-scans the run from
+/// every start and every backtrack point.
+///
+/// Units are charged off the per-step path:
+///
+/// - A greedy run with steps after it pays one unit per byte it consumes. It
+///   gives back at most those bytes, so its give-backs cost nothing more.
+/// - A greedy run that ends its step list pays nothing. Its bytes lie inside
+///   the match its walk returns. That match is either the search's answer or
+///   an alternation branch whose following steps fail.
+/// - An alternation branch whose following steps fail pays the bytes it
+///   consumed plus one before the next branch runs.
+/// - Entering a step costs nothing. A walk with no retry enters each step of
+///   the program at most once.
+///
+/// So every walk after an attempt's first is paid for, each walk enters O(m)
+/// steps, and a search tries at most n+1 starts: the work is O(m·n).
+const STEP_BUDGET_FACTOR: usize = 16;
+
+/// One step search: the input, and the work the search may still spend.
+/// See [`STEP_BUDGET_FACTOR`].
+///
+/// The input and the allowance travel behind one pointer, so the recursive
+/// matchers take no more arguments than they would unmetered.
+///
+/// Charging never branches: the allowance goes negative once spent. Only
+/// retries, give-backs and failed attempts test it, so the work done past
+/// the end of the allowance is one retry-free walk, O(m·n). The allowance
+/// cannot wrap: it starts at most `isize::MAX`, and every unit charged is
+/// work already done.
+#[derive(Debug)]
+struct Search<'a> {
+    input: &'a [u8],
+    remaining: isize,
+}
+
+impl<'a> Search<'a> {
+    /// A search of `input` from `from`, with the allowance for it.
+    fn bounded(input: &'a [u8], from: usize) -> Self {
+        // A slice holds at most `isize::MAX` bytes, so the length left fits.
+        let left = (input.len() - from.min(input.len())) as isize;
+        Self {
+            input,
+            remaining: left
+                .saturating_add(1)
+                .saturating_mul(STEP_BUDGET_FACTOR as isize),
+        }
+    }
+
+    /// A search of `input` whose allowance never runs out, for the unmetered
+    /// public entry points.
+    fn unlimited(input: &'a [u8]) -> Self {
+        Self {
+            input,
+            remaining: isize::MAX,
+        }
+    }
+
+    /// Spends `units` bytes consumed by a greedy run with steps after it.
+    #[inline(always)]
+    fn charge(&mut self, units: usize) {
+        self.remaining = self.remaining.wrapping_sub_unsigned(units);
+    }
+
+    /// Spends the `consumed` bytes of an alternation branch whose following
+    /// steps failed, plus one. Returns false once the allowance is gone; the
+    /// caller then fails without trying the next branch, and the search's
+    /// answer is not to be trusted.
+    #[inline(always)]
+    fn retry(&mut self, consumed: usize) -> bool {
+        self.remaining = self
+            .remaining
+            .wrapping_sub_unsigned(consumed)
+            .wrapping_sub(1);
+        self.remaining >= 0
+    }
+
+    /// Whether the search ran out of allowance. A greedy run tests it before
+    /// each give-back and fails once it holds.
+    #[inline(always)]
+    fn exhausted(&self) -> bool {
+        self.remaining < 0
+    }
+}
 
 impl TaggedNfa {
     /// Finds the first match in the input.
@@ -22,34 +113,81 @@ impl TaggedNfa {
     ///
     /// The full input is passed to every attempt, so steps that read left
     /// context (`^`, `\b`, lookbehind) see the real preceding bytes.
+    ///
+    /// Unmetered: attempts at every start, each backtracking its greedy runs,
+    /// can cost far more than one pass over the input. The engines use
+    /// [`TaggedNfa::find_at_metered`] and re-run a search that runs out of
+    /// budget on the PikeVM.
     pub fn find_at(
         steps: &[PatternStep],
         input: &[u8],
         start_from: usize,
     ) -> Option<(usize, usize)> {
+        Self::find_at_metered(steps, &mut Search::unlimited(input), start_from)
+    }
+
+    /// [`TaggedNfa::find_at`] under a work budget proportional to the input
+    /// left to search; a search that runs out is re-run on `pike`, the PikeVM
+    /// for the same pattern, whose single pass is O(m·n).
+    #[inline]
+    pub(crate) fn find_at_bounded(
+        steps: &[PatternStep],
+        pike: &PikeVm,
+        input: &[u8],
+        start_from: usize,
+    ) -> Option<(usize, usize)> {
+        let mut search = Search::bounded(input, start_from);
+        let found = Self::find_at_metered(steps, &mut search, start_from);
+        if search.exhausted() {
+            return pike.find_from(input, start_from);
+        }
+        found
+    }
+
+    /// One attempt anchored at `start`, under the same budget as
+    /// [`TaggedNfa::find_at_bounded`] and re-run anchored on `pike` when it
+    /// runs out. Returns `(start, end)`.
+    #[inline]
+    pub(crate) fn match_at_bounded(
+        steps: &[PatternStep],
+        pike: &PikeVm,
+        input: &[u8],
+        start: usize,
+    ) -> Option<(usize, usize)> {
+        let mut search = Search::bounded(input, start);
+        let found = Self::match_steps(steps, &mut search, start);
+        if search.exhausted() {
+            return pike.find_at(input, start);
+        }
+        found.map(|end| (start, end))
+    }
+
+    /// [`TaggedNfa::find_at`] over `search`. When its allowance runs out, the
+    /// answer is `None` and [`Search::exhausted`] is set.
+    fn find_at_metered(
+        steps: &[PatternStep],
+        search: &mut Search<'_>,
+        start_from: usize,
+    ) -> Option<(usize, usize)> {
+        let input = search.input;
         for start in start_from..=input.len() {
             // Only start at UTF-8 codepoint boundaries (see `is_utf8_boundary`).
             if !crate::nfa::is_utf8_boundary(input, start) {
                 continue;
             }
-            if let Some(end) = Self::match_at(steps, input, start) {
+            if let Some(end) = Self::match_steps(steps, search, start) {
                 return Some((start, end));
+            }
+            if search.exhausted() {
+                return None;
             }
         }
         None
     }
 
-    /// Attempts to match at a specific position, returning the end position on success.
-    ///
-    /// Anchored: only `start` is tried, so a pattern whose match begins later
-    /// reports `None`. Callers that want a search use [`TaggedNfa::find_at`],
-    /// which is this method run over each candidate start in turn.
-    pub(crate) fn match_at(steps: &[PatternStep], input: &[u8], start: usize) -> Option<usize> {
-        Self::match_steps(steps, input, start)
-    }
-
     /// Matches a sequence of steps starting at the given position.
-    fn match_steps(steps: &[PatternStep], input: &[u8], start: usize) -> Option<usize> {
+    fn match_steps(steps: &[PatternStep], search: &mut Search<'_>, start: usize) -> Option<usize> {
+        let input = search.input;
         let mut pos = start;
 
         for (step_idx, step) in steps.iter().enumerate() {
@@ -92,11 +230,12 @@ impl TaggedNfa {
                     // Try to match remaining steps, backtracking if needed
                     let remaining_steps = &steps[step_idx + 1..];
                     if !remaining_steps.is_empty() {
+                        search.charge(pos - min_pos);
                         loop {
-                            if let Some(end) = Self::match_steps(remaining_steps, input, pos) {
+                            if let Some(end) = Self::match_steps(remaining_steps, search, pos) {
                                 return Some(end);
                             }
-                            if pos <= min_pos {
+                            if pos <= min_pos || search.exhausted() {
                                 return None; // Can't backtrack more
                             }
                             pos -= 1; // Backtrack one byte
@@ -116,11 +255,12 @@ impl TaggedNfa {
                     // Try to match remaining steps, backtracking if needed
                     let remaining_steps = &steps[step_idx + 1..];
                     if !remaining_steps.is_empty() {
+                        search.charge(pos - min_pos);
                         loop {
-                            if let Some(end) = Self::match_steps(remaining_steps, input, pos) {
+                            if let Some(end) = Self::match_steps(remaining_steps, search, pos) {
                                 return Some(end);
                             }
-                            if pos <= min_pos {
+                            if pos <= min_pos || search.exhausted() {
                                 return None; // Can't backtrack more
                             }
                             pos -= 1; // Backtrack one byte
@@ -146,11 +286,12 @@ impl TaggedNfa {
                         }
                         pos += 1;
                     }
+                    search.charge(pos - min_pos);
                     // Backtrack until lookahead succeeds
                     pos = Self::backtrack_to_lookahead(
                         lookahead_steps,
                         *is_positive,
-                        input,
+                        search,
                         pos,
                         min_pos,
                     )?;
@@ -165,23 +306,24 @@ impl TaggedNfa {
                         }
                         pos += 1;
                     }
+                    search.charge(pos - min_pos);
                     // Backtrack until lookahead succeeds
                     pos = Self::backtrack_to_lookahead(
                         lookahead_steps,
                         *is_positive,
-                        input,
+                        search,
                         pos,
                         min_pos,
                     )?;
                 }
                 PatternStep::PositiveLookahead(inner_steps) => {
-                    if !Self::check_lookahead(inner_steps, input, pos) {
+                    if !Self::check_lookahead(inner_steps, search, pos) {
                         return None;
                     }
                     // Zero-width: don't advance pos
                 }
                 PatternStep::NegativeLookahead(inner_steps) => {
-                    if Self::check_lookahead(inner_steps, input, pos) {
+                    if Self::check_lookahead(inner_steps, search, pos) {
                         return None;
                     }
                     // Zero-width: don't advance pos
@@ -257,16 +399,18 @@ impl TaggedNfa {
                     // Try to match remaining steps, backtracking if needed
                     let remaining_steps = &steps[step_idx + 1..];
                     if !remaining_steps.is_empty() {
+                        search.charge(pos - min_pos);
                         // Backtrack from longest match to shortest, walking the
                         // run's codepoint boundaries backwards rather than
                         // recording them on the way in — see
                         // [`TaggedNfa::prev_boundary`].
                         let mut boundary = pos;
                         loop {
-                            if let Some(end) = Self::match_steps(remaining_steps, input, boundary) {
+                            if let Some(end) = Self::match_steps(remaining_steps, search, boundary)
+                            {
                                 return Some(end);
                             }
-                            if boundary <= min_pos {
+                            if boundary <= min_pos || search.exhausted() {
                                 return None;
                             }
                             boundary = Self::prev_boundary(input, boundary);
@@ -277,18 +421,33 @@ impl TaggedNfa {
                     // Try each alternative
                     let remaining_steps = &steps[step_idx + 1..];
                     for alt_steps in alternatives {
+                        // A branch that opens on a byte test fails at once
+                        // when the byte at `pos` does not pass it; skip the
+                        // call.
+                        match alt_steps.first() {
+                            Some(PatternStep::Byte(b)) if input.get(pos) != Some(b) => continue,
+                            Some(PatternStep::ByteClass(class))
+                                if !input.get(pos).is_some_and(|&byte| class.contains(byte)) =>
+                            {
+                                continue
+                            }
+                            _ => {}
+                        }
                         // Match the alternative
-                        if let Some(alt_end) = Self::match_steps(alt_steps, input, pos) {
+                        if let Some(alt_end) = Self::match_steps(alt_steps, search, pos) {
                             // Then match remaining steps after the Alt
                             if remaining_steps.is_empty() {
                                 return Some(alt_end);
                             }
                             if let Some(final_end) =
-                                Self::match_steps(remaining_steps, input, alt_end)
+                                Self::match_steps(remaining_steps, search, alt_end)
                             {
                                 return Some(final_end);
                             }
                             // This alternative matched but remaining steps failed, try next alternative
+                            if !search.retry(alt_end - pos) {
+                                return None;
+                            }
                         }
                     }
                     return None;
@@ -316,13 +475,18 @@ impl TaggedNfa {
     /// being re-checked one at a time. A negative assertion is deliberately
     /// excluded: it is satisfied at *most* positions, which are exactly the ones
     /// such a skip would pass over.
+    ///
+    /// Kept out of line: inlined, its loop enlarges the frame of
+    /// [`TaggedNfa::match_steps`], and every step pays for the extra spills.
+    #[inline(never)]
     fn backtrack_to_lookahead(
         lookahead_steps: &[PatternStep],
         is_positive: bool,
-        input: &[u8],
+        search: &mut Search<'_>,
         mut pos: usize,
         min_pos: usize,
     ) -> Option<usize> {
+        let input = search.input;
         // One jump before the walk, never inside it. A positive assertion that
         // opens on a literal byte cannot hold anywhere that byte is absent, so
         // the stretch between the greedy end and the last occurrence is skipped
@@ -338,11 +502,11 @@ impl TaggedNfa {
             }
         }
         loop {
-            let lookahead_match = Self::check_lookahead(lookahead_steps, input, pos);
+            let lookahead_match = Self::check_lookahead(lookahead_steps, search, pos);
             if is_positive == lookahead_match {
                 return Some(pos); // Lookahead succeeded
             }
-            if pos <= min_pos {
+            if pos <= min_pos || search.exhausted() {
                 return None; // Can't backtrack more
             }
             pos -= 1;
@@ -375,7 +539,8 @@ impl TaggedNfa {
 
     /// Checks if the lookahead pattern matches at the given position.
     /// Uses backtracking for greedy quantifiers followed by other patterns.
-    fn check_lookahead(steps: &[PatternStep], input: &[u8], pos: usize) -> bool {
+    fn check_lookahead(steps: &[PatternStep], search: &mut Search<'_>, pos: usize) -> bool {
+        let input = search.input;
         // Optimize common case: `.*X` where X is a character class or byte
         // For `(?=.*\d)`, we need to check if a digit exists within the range that `.*` can match
         if steps.len() == 2 {
@@ -390,6 +555,7 @@ impl TaggedNfa {
                     }
                     star_end += 1;
                 }
+                search.charge(star_end - pos);
 
                 // Now check if the final step matches anywhere from pos to star_end
                 match &steps[1] {
@@ -422,14 +588,19 @@ impl TaggedNfa {
         }
 
         // General case: use recursive backtracking
-        Self::check_lookahead_recursive(steps, input, pos)
+        Self::check_lookahead_recursive(steps, search, pos)
     }
 
     /// Recursive backtracking lookahead checker.
-    fn check_lookahead_recursive(steps: &[PatternStep], input: &[u8], pos: usize) -> bool {
+    fn check_lookahead_recursive(
+        steps: &[PatternStep],
+        search: &mut Search<'_>,
+        pos: usize,
+    ) -> bool {
         if steps.is_empty() {
             return true;
         }
+        let input = search.input;
 
         let step = &steps[0];
         let rest = &steps[1..];
@@ -439,7 +610,7 @@ impl TaggedNfa {
                 if pos >= input.len() || input[pos] != *b {
                     return false;
                 }
-                Self::check_lookahead_recursive(rest, input, pos + 1)
+                Self::check_lookahead_recursive(rest, search, pos + 1)
             }
             PatternStep::ByteClass(byte_class) => {
                 if pos >= input.len() {
@@ -449,7 +620,7 @@ impl TaggedNfa {
                 if !byte_class.contains(byte) {
                     return false;
                 }
-                Self::check_lookahead_recursive(rest, input, pos + 1)
+                Self::check_lookahead_recursive(rest, search, pos + 1)
             }
             PatternStep::GreedyPlus(byte_class) => {
                 // Must match at least one
@@ -469,10 +640,14 @@ impl TaggedNfa {
                     }
                     end += 1;
                 }
+                search.charge(end - pos);
                 // Backtrack from longest match to shortest (at least 1)
                 for p in (pos + 1..=end).rev() {
-                    if Self::check_lookahead_recursive(rest, input, p) {
+                    if Self::check_lookahead_recursive(rest, search, p) {
                         return true;
+                    }
+                    if search.exhausted() {
+                        return false;
                     }
                 }
                 false
@@ -487,10 +662,14 @@ impl TaggedNfa {
                     }
                     end += 1;
                 }
+                search.charge(end - pos);
                 // Backtrack from longest match to shortest (including 0)
                 for p in (pos..=end).rev() {
-                    if Self::check_lookahead_recursive(rest, input, p) {
+                    if Self::check_lookahead_recursive(rest, search, p) {
                         return true;
+                    }
+                    if search.exhausted() {
+                        return false;
                     }
                 }
                 false
@@ -499,42 +678,42 @@ impl TaggedNfa {
                 if !crate::nfa::is_word_boundary(input, pos) {
                     return false;
                 }
-                Self::check_lookahead_recursive(rest, input, pos)
+                Self::check_lookahead_recursive(rest, search, pos)
             }
             PatternStep::NotWordBoundary => {
                 if crate::nfa::is_word_boundary(input, pos) {
                     return false;
                 }
-                Self::check_lookahead_recursive(rest, input, pos)
+                Self::check_lookahead_recursive(rest, search, pos)
             }
             PatternStep::StartOfText => {
                 if pos != 0 {
                     return false;
                 }
-                Self::check_lookahead_recursive(rest, input, pos)
+                Self::check_lookahead_recursive(rest, search, pos)
             }
             PatternStep::EndOfText => {
                 if !crate::nfa::at_end_or_before_final_newline(input, pos) {
                     return false;
                 }
-                Self::check_lookahead_recursive(rest, input, pos)
+                Self::check_lookahead_recursive(rest, search, pos)
             }
             PatternStep::StartOfLine => {
                 if !crate::nfa::at_line_start(input, pos) {
                     return false;
                 }
-                Self::check_lookahead_recursive(rest, input, pos)
+                Self::check_lookahead_recursive(rest, search, pos)
             }
             PatternStep::EndOfLine => {
                 if !crate::nfa::at_line_end(input, pos) {
                     return false;
                 }
-                Self::check_lookahead_recursive(rest, input, pos)
+                Self::check_lookahead_recursive(rest, search, pos)
             }
             PatternStep::CodepointClass(cpclass, _target) => {
                 if let Some((cp, len)) = Self::decode_utf8(input, pos) {
                     if cpclass.contains(cp) {
-                        return Self::check_lookahead_recursive(rest, input, pos + len);
+                        return Self::check_lookahead_recursive(rest, search, pos + len);
                     }
                 }
                 false
@@ -553,6 +732,7 @@ impl TaggedNfa {
                         }
                         end += len2;
                     }
+                    search.charge(end - pos);
                     // Backtrack from longest match to shortest (at least 1),
                     // walking the run's codepoint boundaries backwards rather
                     // than recording them on the way in — see
@@ -561,10 +741,10 @@ impl TaggedNfa {
                     let min_pos = pos + len;
                     let mut boundary = end;
                     loop {
-                        if Self::check_lookahead_recursive(rest, input, boundary) {
+                        if Self::check_lookahead_recursive(rest, search, boundary) {
                             return true;
                         }
-                        if boundary <= min_pos {
+                        if boundary <= min_pos || search.exhausted() {
                             return false;
                         }
                         boundary = Self::prev_boundary(input, boundary);
@@ -950,5 +1130,63 @@ mod multi_width_lookbehind_tests {
         // Only one space behind: no total may be satisfied.
         assert_eq!(TaggedNfa::find(&steps, " x".as_bytes()), None);
         assert_eq!(TaggedNfa::find(&steps, "\u{2003}x".as_bytes()), None);
+    }
+}
+
+#[cfg(test)]
+mod metering_tests {
+    use super::*;
+    use crate::nfa::{ByteClass, ByteRange};
+
+    fn run_of(byte: u8) -> ByteClass {
+        ByteClass::new(vec![ByteRange::single(byte)])
+    }
+
+    /// Runs a bounded search of `steps` over `input` and returns the answer
+    /// and the allowance left.
+    fn metered(steps: &[PatternStep], input: &[u8]) -> (Option<(usize, usize)>, isize) {
+        let mut search = Search::bounded(input, 0);
+        let found = TaggedNfa::find_at_metered(steps, &mut search, 0);
+        (found, search.remaining)
+    }
+
+    #[test]
+    fn a_run_that_ends_the_answer_costs_nothing() {
+        let steps = [PatternStep::GreedyPlus(run_of(b'a'))];
+        let input = vec![b'a'; 4096];
+        let (found, left) = metered(&steps, &input);
+        assert_eq!(found, Some((0, input.len())));
+        assert_eq!(left, Search::bounded(&input, 0).remaining);
+    }
+
+    #[test]
+    fn a_run_with_steps_after_it_runs_out_on_a_quadratic_input() {
+        // `a+z` over a run of `a` with no `z`: every start re-scans the run.
+        let steps = [
+            PatternStep::GreedyPlus(run_of(b'a')),
+            PatternStep::Byte(b'z'),
+        ];
+        let input = vec![b'a'; 4096];
+        let (found, left) = metered(&steps, &input);
+        assert_eq!(found, None);
+        assert!(left < 0, "the search kept {left} units");
+    }
+
+    #[test]
+    fn a_discarded_branch_pays_for_the_run_that_ends_it() {
+        // `(?:a+)z` kept as an alternation with a step after it: the branch's
+        // run ends its step list, so only the failed step after the branch
+        // pays for the bytes the run consumed.
+        let steps = [
+            PatternStep::Alt(vec![vec![PatternStep::GreedyPlus(run_of(b'a'))]]),
+            PatternStep::Byte(b'z'),
+        ];
+        let mut input = vec![b'a'; 4096];
+        let (found, left) = metered(&steps, &input);
+        assert_eq!(found, None);
+        assert!(left < 0, "the search kept {left} units");
+
+        input.push(b'z');
+        assert_eq!(TaggedNfa::find(&steps, &input), Some((0, input.len())));
     }
 }

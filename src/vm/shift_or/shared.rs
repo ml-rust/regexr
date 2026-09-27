@@ -31,7 +31,7 @@ use crate::nfa::{
 /// - Lookaround - use PikeVM instead
 /// - Non-greedy quantifiers (`.*?`, `.+?`) - Glushkov doesn't preserve match preference
 /// - Patterns with more than 64 positions
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ShiftOr {
     /// Bit masks for each byte value.
     /// mask[b] has bit i cleared (0) if position i can transition on byte b.
@@ -58,6 +58,10 @@ pub struct ShiftOr {
     /// Set when the whole pattern is one repeated byte class, which a scan
     /// answers directly. See [`ClassRun`].
     pub(crate) class_run: Option<ClassRun>,
+    /// Follow sets of the automaton read backwards: `reverse_follow[q]` holds
+    /// every position `p` whose follow set contains `q`. See
+    /// [`ShiftOr::leftmost_start`].
+    pub(crate) reverse_follow: Vec<u64>,
 }
 
 /// A pattern that is nothing but a repeated byte class — `\w+`, `\d+`,
@@ -158,10 +162,48 @@ impl ClassRun {
     }
 }
 
-/// How much input the per-start attempts in [`ShiftOr::find_end_anchored`] may
-/// walk in total before the binary search takes over. Matches the lazy DFA's
-/// rule: attempts that fail near their start never reach it.
-const SCAN_BUDGET_FACTOR: usize = 4;
+/// The walked-byte budget of a start-by-start search from `from`, before the
+/// linear-time search takes over. Shares [`crate::dfa::lazy::scan_budget`]
+/// with the lazy DFA's rule: attempts that fail near their start never reach
+/// it. Shift-Or has no bounded-match-length hint to sharpen it with.
+fn scan_budget(input: &[u8], from: usize) -> usize {
+    crate::dfa::lazy::scan_budget(input.len(), from, None)
+}
+
+/// Follow sets of a position automaton read backwards: entry `q` holds every
+/// position `p` whose follow set contains `q`.
+fn reverse_follow(follow: &[u64]) -> Vec<u64> {
+    let mut reversed = vec![0u64; follow.len()];
+    for (p, &targets) in follow.iter().enumerate() {
+        let mut live = targets;
+        while live != 0 {
+            let q = live.trailing_zeros() as usize;
+            if let Some(entry) = reversed.get_mut(q) {
+                *entry |= 1u64 << p;
+            }
+            live &= live - 1;
+        }
+    }
+    reversed
+}
+
+/// [`reverse_follow`] for the 256-position automaton.
+fn reverse_follow_wide(follow: &[BitSet256]) -> Vec<BitSet256> {
+    let mut reversed = vec![BitSet256::empty(); follow.len()];
+    for (p, targets) in follow.iter().enumerate() {
+        for (word_idx, &word) in targets.parts.iter().enumerate() {
+            let mut live = word;
+            while live != 0 {
+                let q = word_idx * 64 + live.trailing_zeros() as usize;
+                if let Some(entry) = reversed.get_mut(q) {
+                    entry.set(p);
+                }
+                live &= live - 1;
+            }
+        }
+    }
+    reversed
+}
 
 impl ShiftOr {
     /// Tries to compile an HIR into a Shift-Or matcher.
@@ -260,6 +302,7 @@ impl ShiftOr {
             has_start_anchor,
             has_end_anchor,
             class_run: None,
+            reverse_follow: reverse_follow(&nfa.follow),
         })
     }
 
@@ -351,16 +394,13 @@ impl ShiftOr {
         // `scan_limit` first rules out "no match anywhere" in a single pass and
         // otherwise caps how far this scan has to walk.
         let scan_end = self.scan_limit(input, 0)?;
-        if self.has_end_anchor {
-            if let Some(found) = self.find_end_anchored(input, 0) {
-                return Some(found);
-            }
+        let found = if self.has_end_anchor {
+            self.find_end_anchored(input, 0)
         } else {
-            for start in 0..=scan_end {
-                if let Some(end) = self.match_at(input, start) {
-                    return Some((start, end));
-                }
-            }
+            self.find_bounded(input, 0, scan_end)
+        };
+        if found.is_some() {
+            return found;
         }
 
         // If pattern is nullable and no non-empty match found, return empty match at 0
@@ -395,6 +435,9 @@ impl ShiftOr {
         let scan_end = self.scan_limit(input, search_start)?;
         if self.has_end_anchor && !self.has_start_anchor {
             return self.find_end_anchored(input, search_start);
+        }
+        if !self.has_start_anchor {
+            return self.find_bounded(input, search_start, scan_end);
         }
         for start in search_start..=scan_end {
             if let Some(end) = self.match_at(input, start) {
@@ -482,88 +525,36 @@ impl ShiftOr {
         }
     }
 
-    /// One unanchored pass that accepts only where `$` allows, counting starts
-    /// no later than `seed_until`.
+    /// Tries starts from `from` through `scan_end` for an unanchored pattern.
     ///
-    /// The bit-parallel state is a set of reachable pattern positions and says
-    /// nothing about which start reached them, so it cannot rank two starts. It
-    /// can, however, be told which starts to consider at all: `First` is injected
-    /// while the scan is at or before `seed_until` and withheld afterwards. That
-    /// makes the answer monotone in `seed_until` — a start that qualifies also
-    /// qualifies under any larger bound — which is what
-    /// [`ShiftOr::leftmost_end_anchored_start`] binary-searches.
-    fn matches_end_anchored_starting_by(
-        &self,
-        input: &[u8],
-        from: usize,
-        seed_until: usize,
-    ) -> bool {
-        let mut state = !0u64;
+    /// Trying one start at a time is right while the attempts give up near
+    /// where they began. It collapses when they do not: `a[a-z]*!` over a long
+    /// run of `a` walks to the end of the run from every start. So the attempts
+    /// are metered, and once they have collectively walked several times the
+    /// input, [`ShiftOr::find_linear`] takes over from the next start.
+    fn find_bounded(&self, input: &[u8], from: usize, scan_end: usize) -> Option<(usize, usize)> {
+        let budget = scan_budget(input, from);
+        let mut walked = 0usize;
 
-        for pos in from..=input.len() {
-            // A nullable pattern matches empty wherever `$` holds, and that empty
-            // match starts — and ends — right here.
-            if self.nullable
-                && pos <= seed_until
-                && crate::nfa::at_end_or_before_final_newline(input, pos)
-            {
-                return true;
+        for start in from..=scan_end {
+            let (end, reach) = self.match_at_reach(input, start);
+            if let Some(end) = end {
+                return Some((start, end));
             }
-            if pos == input.len() {
-                break;
-            }
-
-            let mut reachable = if pos <= seed_until { self.first } else { 0 };
-            let mut active = !state;
-            while active != 0 {
-                let p = active.trailing_zeros() as usize;
-                reachable |= self.follow[p];
-                active &= active - 1;
-            }
-
-            state = (!reachable) | self.masks[input[pos] as usize];
-
-            if (state | self.accept) != !0u64
-                && crate::nfa::at_end_or_before_final_newline(input, pos + 1)
-            {
-                return true;
-            }
-            // Nothing live and nothing more to seed: no later start qualifies.
-            if state == !0u64 && pos >= seed_until {
-                return false;
+            walked += reach.saturating_sub(start);
+            if walked > budget {
+                return self.find_linear(input, start + 1);
             }
         }
-
-        false
-    }
-
-    /// The leftmost start at or after `from` of a match that ends where `$`
-    /// allows, in O(n log n) rather than the O(n²) of trying every start.
-    fn leftmost_end_anchored_start(&self, input: &[u8], from: usize) -> Option<usize> {
-        if !self.matches_end_anchored_starting_by(input, from, input.len()) {
-            return None;
-        }
-        let (mut lo, mut hi) = (from, input.len());
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if self.matches_end_anchored_starting_by(input, from, mid) {
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
-        }
-        Some(lo)
+        None
     }
 
     /// Scans starts from `from` for a match that ends where `$` allows.
     ///
-    /// Trying one start at a time is right while the attempts give up near where
-    /// they began. It collapses when they do not: `(a+)+$` over `"aaaa…"` runs
-    /// every attempt to the end of the input and never accepts, one full pass per
-    /// start. So the attempts are metered, and once they have collectively walked
-    /// several times the input the binary search takes over.
+    /// Metered like [`ShiftOr::find_bounded`]: `(a+)+$` over `"aaaa…"` runs
+    /// every attempt to the end of the input and never accepts.
     fn find_end_anchored(&self, input: &[u8], from: usize) -> Option<(usize, usize)> {
-        let budget = input.len().saturating_mul(SCAN_BUDGET_FACTOR);
+        let budget = scan_budget(input, from);
         let mut walked = 0usize;
 
         for start in from..=input.len() {
@@ -575,36 +566,103 @@ impl ShiftOr {
             }
             walked += reach.saturating_sub(start);
             if walked > budget {
-                let s = self.leftmost_end_anchored_start(input, start + 1)?;
-                let end = self.match_at(input, s)?;
-                // `$` holds at one position, so a shorter end is further from it
-                // than the greedy one — if the greedy end misses, none reaches.
-                if !crate::nfa::at_end_or_before_final_newline(input, end) {
-                    return None;
-                }
-                return Some((s, end));
+                return self.find_linear(input, start + 1);
             }
         }
         None
+    }
+
+    /// The leftmost match starting at or after `from`, in time linear in the
+    /// input: one backward pass finds the start (see
+    /// [`ShiftOr::leftmost_start`]) and one anchored pass from it the longest
+    /// end.
+    ///
+    /// Leftmost-longest is the leftmost-first match for every pattern Shift-Or
+    /// runs (see `automata_match_like_pikevm`). With an end anchor the start is
+    /// that of a match ending where `$` holds, and the longest end from it is
+    /// then at or past that point, so it satisfies `$` as well.
+    pub(crate) fn find_linear(&self, input: &[u8], from: usize) -> Option<(usize, usize)> {
+        if from > input.len() {
+            return None;
+        }
+        if self.has_start_anchor {
+            return if from == 0 {
+                self.try_match_at(input, 0)
+            } else {
+                None
+            };
+        }
+        let start = self.leftmost_start(input, from)?;
+        let end = self.match_at(input, start)?;
+        if self.has_end_anchor && !crate::nfa::at_end_or_before_final_newline(input, end) {
+            return None;
+        }
+        Some((start, end))
+    }
+
+    /// The smallest position at or after `from` where a match begins, found in
+    /// one right-to-left pass.
+    ///
+    /// The pass runs the position automaton backwards: a thread enters at a
+    /// last position wherever a match may end (every position, or only where
+    /// `$` holds), steps through [`ShiftOr::reverse_follow`], and has found a
+    /// match start when it stands on a first position. Every end is live at
+    /// once, so one pass answers for every start.
+    pub(crate) fn leftmost_start(&self, input: &[u8], from: usize) -> Option<usize> {
+        let may_end = |end: usize| {
+            !self.has_end_anchor || crate::nfa::at_end_or_before_final_newline(input, end)
+        };
+        let last = !self.accept;
+        let mut leftmost = None;
+        if self.nullable && may_end(input.len()) {
+            leftmost = Some(input.len());
+        }
+        // Positive logic here: bit `p` set means the byte just read was
+        // matched by position `p`.
+        let mut active = 0u64;
+        for pos in (from..input.len()).rev() {
+            let mut reachable = if may_end(pos + 1) { last } else { 0 };
+            let mut live = active;
+            while live != 0 {
+                let p = live.trailing_zeros() as usize;
+                reachable |= self.reverse_follow.get(p).copied().unwrap_or(0);
+                live &= live - 1;
+            }
+            active = reachable & !self.masks[input[pos] as usize];
+            if active & self.first != 0 || (self.nullable && may_end(pos)) {
+                leftmost = Some(pos);
+            }
+        }
+        leftmost
     }
 
     /// Tries to match at exactly the given position.
     /// Returns (start, end) if matched, None otherwise.
     /// Use this when you know the match should start at exactly `pos` (e.g., from a prefilter).
     pub fn try_match_at(&self, input: &[u8], pos: usize) -> Option<(usize, usize)> {
+        self.try_match_at_reach(input, pos).0
+    }
+
+    /// [`ShiftOr::try_match_at`], also reporting how far the attempt walked,
+    /// for callers that meter attempts at many positions.
+    pub(crate) fn try_match_at_reach(
+        &self,
+        input: &[u8],
+        pos: usize,
+    ) -> (Option<(usize, usize)>, usize) {
         // For start anchor: only position 0 can match
         if self.has_start_anchor && pos != 0 {
-            return None;
+            return (None, pos);
         }
-        match self.match_at(input, pos) {
-            Some(end) => {
+        match self.match_at_reach(input, pos) {
+            (Some(end), reach) => {
                 // For end anchor: must match to end of input
                 if self.has_end_anchor && !crate::nfa::at_end_or_before_final_newline(input, end) {
-                    return None;
+                    return (None, reach);
                 }
-                Some((pos, end))
+                (Some((pos, end)), reach)
             }
-            None => None,
+            (None, reach) => (None, reach),
         }
     }
 
@@ -614,7 +672,11 @@ impl ShiftOr {
     }
 
     /// [`ShiftOr::match_at`], also reporting how far the scan walked before the
-    /// state went empty. `find_end_anchored` meters attempts with it.
+    /// state went empty. The start-by-start loops meter attempts with it.
+    ///
+    /// Inlined so the pair stays in registers instead of coming back through
+    /// memory on every attempt.
+    #[inline(always)]
     fn match_at_reach(&self, input: &[u8], start: usize) -> (Option<usize>, usize) {
         if start > input.len() {
             return (None, start);
@@ -739,6 +801,9 @@ pub struct ShiftOrWide {
     pub(crate) nullable: bool,
     /// Number of positions.
     pub(crate) position_count: usize,
+    /// Follow sets of the automaton read backwards; see
+    /// [`ShiftOr::reverse_follow`].
+    pub(crate) reverse_follow: Vec<BitSet256>,
 }
 
 impl ShiftOrWide {
@@ -777,6 +842,7 @@ impl ShiftOrWide {
             follow: nfa.follow.clone(),
             nullable: nfa.nullable,
             position_count: nfa.position_count,
+            reverse_follow: reverse_follow_wide(&nfa.follow),
         })
     }
 
@@ -807,10 +873,8 @@ impl ShiftOrWide {
         // No match to find when this is `None`. A nullable pattern still
         // matches empty, and `scan_limit` never reports `None` for one.
         let scan_end = self.scan_limit(input, 0)?;
-        for start in 0..=scan_end {
-            if let Some(end) = self.match_at(input, start) {
-                return Some((start, end));
-            }
+        if let Some(found) = self.find_bounded(input, 0, scan_end) {
+            return Some(found);
         }
 
         // If pattern is nullable and no non-empty match found, return empty match at 0
@@ -828,12 +892,68 @@ impl ShiftOrWide {
         }
 
         let scan_end = self.scan_limit(input, pos)?;
-        for start in pos..=scan_end {
-            if let Some(end) = self.match_at(input, start) {
+        self.find_bounded(input, pos, scan_end)
+    }
+
+    /// Tries starts from `from` through `scan_end`, metered as in
+    /// `ShiftOr::find_bounded`; past the budget, [`ShiftOrWide::find_linear`]
+    /// takes over from the next start.
+    fn find_bounded(&self, input: &[u8], from: usize, scan_end: usize) -> Option<(usize, usize)> {
+        let budget = scan_budget(input, from);
+        let mut walked = 0usize;
+
+        for start in from..=scan_end {
+            let (end, reach) = self.match_at_reach(input, start);
+            if let Some(end) = end {
                 return Some((start, end));
+            }
+            walked += reach.saturating_sub(start);
+            if walked > budget {
+                return self.find_linear(input, start + 1);
             }
         }
         None
+    }
+
+    /// The leftmost match starting at or after `from`, in time linear in the
+    /// input; the 256-position counterpart of `ShiftOr::find_linear`.
+    fn find_linear(&self, input: &[u8], from: usize) -> Option<(usize, usize)> {
+        if from > input.len() {
+            return None;
+        }
+        let start = self.leftmost_start(input, from)?;
+        self.match_at(input, start).map(|end| (start, end))
+    }
+
+    /// The smallest position at or after `from` where a match begins, found in
+    /// one right-to-left pass; see `ShiftOr::leftmost_start`.
+    fn leftmost_start(&self, input: &[u8], from: usize) -> Option<usize> {
+        let last = self.accept.complement();
+        let mut leftmost = None;
+        if self.nullable {
+            leftmost = Some(input.len());
+        }
+        // Positive logic: bit `p` set means the byte just read was matched by
+        // position `p`.
+        let mut active = BitSet256::empty();
+        for pos in (from..input.len()).rev() {
+            let mut reachable = last;
+            for (word_idx, &word) in active.parts.iter().enumerate() {
+                let mut live = word;
+                while live != 0 {
+                    let p = word_idx * 64 + live.trailing_zeros() as usize;
+                    if let Some(&targets) = self.reverse_follow.get(p) {
+                        reachable.union_assign(targets);
+                    }
+                    live &= live - 1;
+                }
+            }
+            active = reachable.intersection(self.masks[input[pos] as usize].complement());
+            if self.nullable || !active.intersection(self.first).is_empty() {
+                leftmost = Some(pos);
+            }
+        }
+        leftmost
     }
 
     /// One bit-parallel pass over `input[from..]` keeping a fresh start live at
@@ -888,10 +1008,27 @@ impl ShiftOrWide {
         self.match_at(input, pos).map(|end| (pos, end))
     }
 
+    /// [`ShiftOrWide::try_match_at`], also reporting how far the attempt
+    /// walked.
+    pub(crate) fn try_match_at_reach(
+        &self,
+        input: &[u8],
+        pos: usize,
+    ) -> (Option<(usize, usize)>, usize) {
+        let (end, reach) = self.match_at_reach(input, pos);
+        (end.map(|end| (pos, end)), reach)
+    }
+
     /// Core matching logic using 256-bit state vectors.
     fn match_at(&self, input: &[u8], start: usize) -> Option<usize> {
+        self.match_at_reach(input, start).0
+    }
+
+    /// [`ShiftOrWide::match_at`], also reporting how far the scan walked
+    /// before the state went empty.
+    fn match_at_reach(&self, input: &[u8], start: usize) -> (Option<usize>, usize) {
         if start > input.len() {
-            return None;
+            return (None, start);
         }
 
         let mut last_match = None;
@@ -944,11 +1081,11 @@ impl ShiftOrWide {
 
             // If all bits are 1, no possible match from this starting point
             if state.is_all_ones() {
-                break;
+                return (last_match, start + i + 1);
             }
         }
 
-        last_match
+        (last_match, input.len())
     }
 }
 
@@ -1081,6 +1218,73 @@ mod scan_bound_tests {
             failures.len(),
             failures.join("\n")
         );
+    }
+
+    /// The linear-time search the metered loops hand over to must report the
+    /// match trying every start does, from every resume point.
+    #[test]
+    fn linear_search_matches_brute_force() {
+        let mut failures = Vec::new();
+        for pattern in PATTERNS {
+            let Some(so) = compile(pattern) else {
+                continue;
+            };
+            for text in TEXTS {
+                let bytes = text.as_bytes();
+                for from in 0..=bytes.len() {
+                    let expected = brute_force(&so, bytes, from);
+                    let got = so.find_linear(bytes, from);
+                    if got != expected {
+                        failures.push(format!(
+                            "{pattern:?} on {text:?} from {from}: brute={expected:?} got={got:?}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} divergences:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+
+    /// The same for the 256-position automaton, on patterns wide enough to
+    /// need it.
+    #[test]
+    fn wide_linear_search_matches_brute_force() {
+        let patterns = [
+            format!("{}b", "a?".repeat(70)),
+            format!("x[a-z]*{}", "y".repeat(70)),
+            format!("(?:{})+", "ab".repeat(40)),
+        ];
+        let texts = [
+            String::new(),
+            "b".to_string(),
+            format!("{}b", "a".repeat(80)),
+            format!("x{}{}", "q".repeat(5), "y".repeat(70)),
+            format!("xx{}", "y".repeat(71)),
+            "ab".repeat(90),
+        ];
+        for pattern in &patterns {
+            let hir = parse(pattern)
+                .and_then(|ast| translate(&ast))
+                .expect("pattern parses");
+            let wide = ShiftOrWide::from_hir(&hir).expect("pattern fits the wide automaton");
+            for text in &texts {
+                let bytes = text.as_bytes();
+                for from in 0..=bytes.len() {
+                    let expected = (from..=bytes.len())
+                        .find_map(|start| wide.match_at(bytes, start).map(|end| (start, end)));
+                    assert_eq!(
+                        wide.find_linear(bytes, from),
+                        expected,
+                        "{pattern:?} on {text:?} from {from}"
+                    );
+                }
+            }
+        }
     }
 
     /// The one-pass rejector must agree with the scan about whether anything

@@ -19,10 +19,11 @@ use crate::nfa::Nfa;
 use dynasmrt::{AssemblyOffset, ExecutableBuffer};
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// How much input the per-start retries in
-/// [`CompiledRegex::search_unanchored`] may walk in total before the
-/// interpreter takes over. Matches the lazy DFA's and Shift-Or's rule.
-const SCAN_BUDGET_FACTOR: usize = 4;
+// How much input the per-start retries in `CompiledRegex::search_unanchored`
+// may walk in total before the interpreter takes over: the lazy DFA's and
+// Shift-Or's factor, which the generated code also uses for its internal
+// restarts.
+use crate::dfa::lazy::shared::SCAN_BUDGET_FACTOR;
 
 /// Largest DFA the ARM64 emitter will take, bounded by branch displacement and
 /// code size rather than by anything about the pattern.
@@ -80,12 +81,12 @@ pub struct CompiledRegex {
     /// The NFA the code was generated from, for unanchored patterns only.
     ///
     /// The generated code stops at the first attempt that reaches the end of
-    /// the input, and a candidate whose end fails its assertion is rejected
-    /// after the scan. Both leave later starts unexamined, and resuming from
-    /// the next start costs one scan per start. That is quadratic when every
-    /// attempt runs long. The interpreter covers every start in a single pass,
-    /// so [`CompiledRegex::search_unanchored`] hands over to it once the
-    /// retries have proven expensive.
+    /// the input, at a candidate whose end fails an assertion the scan
+    /// stripped, and once its restarts have walked their budget. Each leaves
+    /// later starts unexamined, and resuming from the next start costs one
+    /// scan per start. That is quadratic when every attempt runs long, so
+    /// [`CompiledRegex::search_unanchored`] hands over to the interpreter's
+    /// linear-time search once the retries have proven expensive.
     fallback_nfa: Option<Arc<Nfa>>,
     /// The interpreter built from `fallback_nfa`, created on first use.
     dfa_fallback: OnceLock<Mutex<LazyDfa>>,
@@ -208,11 +209,6 @@ impl CompiledRegex {
         let budget = input.len().saturating_mul(SCAN_BUDGET_FACTOR);
         let mut walked = 0usize;
         let mut from = start_from;
-        // Set once the fallback DFA gives up on its state-cache ceiling. Retrying
-        // it would rebuild the cache to the ceiling again at every remaining start
-        // position, so this search sticks with the scan below, which is complete
-        // on its own — the fallback is only ever a shortcut.
-        let mut fallback_gave_up = false;
         loop {
             let prev_class = self.prev_class_at(input, from);
             let next = match self.raw_scan(&input[from..], prev_class) {
@@ -233,16 +229,10 @@ impl CompiledRegex {
             if next > input.len() {
                 return None;
             }
-            if walked > budget && !fallback_gave_up {
+            if walked > budget {
                 if let Some(dfa) = self.fallback() {
                     let mut dfa = dfa.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                    match dfa.find_from(input, next) {
-                        Ok(found) => return found,
-                        // Its transition table is incomplete past the ceiling, so
-                        // its answer would be a false negative rather than a real
-                        // one. Fall through and keep scanning.
-                        Err(_) => fallback_gave_up = true,
-                    }
+                    return dfa.find_from_linear(input, next);
                 }
             }
             from = next;
@@ -700,6 +690,22 @@ pub struct MaterializedDfa {
     pub has_multiline_anchors: bool,
     /// Whether the *start* anchor specifically is line-mode.
     pub has_multiline_start_anchor: bool,
+}
+
+impl MaterializedDfa {
+    /// Whether an attempt in state `id` has read at most its first byte.
+    ///
+    /// True for a start state no transition leads back to. An attempt that
+    /// dies there walked one byte, so the generated code restarts from it
+    /// without charging the restart budget, which keeps the common case — an
+    /// attempt rejected by its first byte — as cheap as an unmetered restart.
+    pub(crate) fn dies_on_first_byte(&self, id: DfaStateId) -> bool {
+        (id == self.start || self.start_word == Some(id))
+            && !self
+                .states
+                .iter()
+                .any(|state| state.transitions.contains(&Some(id)))
+    }
 }
 
 /// A materialized DFA state with all transitions computed.

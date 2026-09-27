@@ -187,7 +187,7 @@ impl TaggedNfaJit {
             if result == JIT_USE_INTERPRETER {
                 // Use fast TaggedNfa if we have fallback_steps
                 if let Some(ref steps) = self.fallback_steps {
-                    return TaggedNfa::find(steps, input);
+                    return TaggedNfa::find_at_bounded(steps, &self.fallback_vm, input, 0);
                 }
                 // Otherwise fall back to PikeVm
                 return self.fallback_vm.find(input);
@@ -406,7 +406,7 @@ impl TaggedNfaJit {
             return None;
         }
         if let Some(ref steps) = self.fallback_steps {
-            return TaggedNfa::match_at(steps, input, pos).map(|end| (pos, end));
+            return TaggedNfa::match_at_bounded(steps, &self.fallback_vm, input, pos);
         }
         // `find_at`, not `find_from`: the match must begin at `pos`.
         self.fallback_vm.find_at(input, pos)
@@ -429,7 +429,7 @@ impl TaggedNfaJit {
         // absolute position with the full input visible.
         if self.needs_left_context {
             if let Some(ref steps) = self.fallback_steps {
-                return TaggedNfa::find_at(steps, input, start);
+                return TaggedNfa::find_at_bounded(steps, &self.fallback_vm, input, start);
             }
             return self.fallback_vm.find_from(input, start);
         }
@@ -446,7 +446,7 @@ impl TaggedNfaJit {
             if result == JIT_USE_INTERPRETER {
                 // Use fast TaggedNfa if we have fallback_steps
                 if let Some(ref steps) = self.fallback_steps {
-                    return TaggedNfa::find_at(steps, input, start);
+                    return TaggedNfa::find_at_bounded(steps, &self.fallback_vm, input, start);
                 }
                 return self.fallback_vm.find_from(input, start);
             }
@@ -481,7 +481,7 @@ impl TaggedNfaJit {
 
         if result == JIT_USE_INTERPRETER {
             if let Some(ref steps) = self.fallback_steps {
-                return TaggedNfa::find_at(steps, input, start);
+                return TaggedNfa::find_at_bounded(steps, &self.fallback_vm, input, start);
             }
             return self.fallback_vm.find_from(input, start);
         }

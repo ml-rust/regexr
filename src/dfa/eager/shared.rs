@@ -72,15 +72,15 @@ pub const MATERIALIZATION_WORK_BUDGET: usize = 200_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EagerMaterializationBudgetExceeded;
 
-/// An eager-DFA search stopped because the unanchored start-position loop in
+/// An eager-DFA search stopped because its start-position loop in
 /// `EagerDfa::find_from` walked past its scan budget.
 ///
 /// Distinct from "no match": trying every remaining start position at up to
 /// O(n) cost each would make the search quadratic on patterns whose failed
-/// attempts each scan to the end (the shape a word-boundary pattern over a
-/// long non-matching run has), so the loop gives up rather than paying for
-/// it. Callers re-run the search on a fresh `LazyDfa`, whose single
-/// unanchored pass stays linear for word-boundary patterns — see the
+/// attempts each scan far (`(?s)a.*b` over a run of `a`), so the loop gives
+/// up rather than paying for it. The eager DFA holds no NFA to search with,
+/// so the caller re-runs the search from the same position on a linear-time
+/// engine built for the same pattern — see the
 /// [`EagerDfa::find_from`](super::interpreter::EagerDfa::find_from) doc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EagerScanBudgetExceeded;

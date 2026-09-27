@@ -466,6 +466,36 @@ pub(crate) fn jit_must_defer(steps: &[PatternStep]) -> bool {
     quantifiers >= 1 && counts.lookaround >= 1
 }
 
+/// Whether a step program repeats something without bound, anywhere —
+/// including inside an alternation branch or a lookaround body.
+///
+/// The generated code retries every start and backtracks its runs, with no
+/// budget on either: one failed attempt at each start of a run is one scan of
+/// the run each, so a program with an unbounded repetition can cost time
+/// quadratic in the input. Without one, every attempt reads a bounded number
+/// of bytes, and the code is linear. Engine selection keeps programs that
+/// repeat without bound on the metered interpreter instead.
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
+pub(crate) fn has_unbounded_repetition(steps: &[PatternStep]) -> bool {
+    steps.iter().any(|step| match step {
+        PatternStep::GreedyPlus(_)
+        | PatternStep::GreedyStar(_)
+        | PatternStep::GreedyCodepointPlus(_)
+        | PatternStep::NonGreedyPlus(_, _)
+        | PatternStep::NonGreedyStar(_, _)
+        | PatternStep::GreedyPlusLookahead(_, _, _)
+        | PatternStep::GreedyStarLookahead(_, _, _) => true,
+        PatternStep::Alt(branches) => branches
+            .iter()
+            .any(|branch| has_unbounded_repetition(branch)),
+        PatternStep::PositiveLookahead(inner)
+        | PatternStep::NegativeLookahead(inner)
+        | PatternStep::PositiveLookbehind(inner, _)
+        | PatternStep::NegativeLookbehind(inner, _) => has_unbounded_repetition(inner),
+        _ => false,
+    })
+}
+
 /// Step kinds that decide whether the JIT can emit a program (see
 /// [`jit_must_defer`]).
 #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]

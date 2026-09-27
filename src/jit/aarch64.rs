@@ -112,15 +112,23 @@ pub fn compile_states(
         emit_dispatch(&mut asm, dispatch, dfa.start, start_word, &state_labels)?;
     }
 
-    // Emit code for each DFA state
+    // Emit code for each DFA state. A state an attempt can only be in before
+    // its second byte dies to the uncharged restart; see `emit_dead_state`.
+    let dead_first_label = asm.new_dynamic_label();
     for state in &dfa.states {
-        emit_state(&mut asm, state, &state_labels, dead_label, no_match_label)?;
+        let dead = if dfa.dies_on_first_byte(state.id) {
+            dead_first_label
+        } else {
+            dead_label
+        };
+        emit_state(&mut asm, state, &state_labels, dead, no_match_label)?;
     }
 
     // Emit dead state
     emit_dead_state(
         &mut asm,
         dead_label,
+        dead_first_label,
         no_match_label,
         restart_label,
         dispatch_label,
@@ -160,6 +168,7 @@ pub fn compile_states(
 /// - x22 = last match position (-1)
 /// - x23 = search start position (0)
 /// - x24 = prev_char_class (for word boundaries)
+/// - x8 = bytes the failed attempts of an unanchored search may still walk
 fn emit_prologue(
     asm: &mut Assembler,
     start_state: DfaStateId,
@@ -200,6 +209,11 @@ fn emit_prologue(
         ; mov x19, #0              // x19 = position = 0
         ; movn x22, 0              // x22 = last match = -1
         ; mov x23, #0              // x23 = search start = 0
+        // Walk budget for the restarts: 4 * (len + 1). Each failed attempt
+        // is charged the bytes it walked; past the budget the scan stops and
+        // the caller takes over with a linear-time search.
+        ; lsl x8, x1, #2
+        ; add x8, x8, #4
     );
 
     // For word boundary patterns, initialize x24 = prev_char_class
@@ -766,9 +780,17 @@ fn compute_byte_ranges(state: &MaterializedState) -> Vec<(u8, u8, DfaStateId)> {
 }
 
 /// Emits the dead state code.
+///
+/// An unanchored attempt that dies at `dead_label` is first charged the bytes
+/// it walked against the budget in x8. Past the budget the code stops as if
+/// the attempt had reached the end of the input, so the caller resumes at the
+/// next start with a linear-time search. `dead_first_label` is the entry for
+/// attempts that read only their first byte (see
+/// `MaterializedDfa::dies_on_first_byte`) and skips the charge.
 fn emit_dead_state(
     asm: &mut Assembler,
     dead_label: DynamicLabel,
+    dead_first_label: DynamicLabel,
     no_match_label: DynamicLabel,
     restart_label: Option<DynamicLabel>,
     dispatch_label: Option<DynamicLabel>,
@@ -784,6 +806,10 @@ fn emit_dead_state(
         // Check if we already have a match
         dynasm!(asm
             ; .arch aarch64
+            ; sub x9, x19, x23
+            ; subs x8, x8, x9
+            ; b.lo =>no_match_label    // Over budget: return the match or stop
+            ; =>dead_first_label
             ; cmp x22, #0
             ; b.ge =>no_match_label
             // Advance search position
@@ -852,6 +878,7 @@ fn emit_dead_state(
         // Anchored: no retry
         dynasm!(asm
             ; .arch aarch64
+            ; =>dead_first_label
             ; b =>no_match_label
         );
     }

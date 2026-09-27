@@ -16,6 +16,7 @@
 mod assertions;
 mod glushkov;
 mod priority;
+mod reverse;
 mod state;
 pub mod tagged;
 mod thompson;
@@ -27,6 +28,7 @@ pub use glushkov::{
     GlushkovWideNfa, MAX_POSITIONS, MAX_POSITIONS_WIDE,
 };
 pub use priority::priority_is_irrelevant;
+pub(crate) use reverse::reverse;
 pub use state::*;
 pub use thompson::*;
 

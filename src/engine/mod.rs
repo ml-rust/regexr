@@ -4,6 +4,7 @@
 
 mod dfa_pool;
 mod executor;
+mod linear;
 mod selector;
 
 pub use executor::*;

@@ -49,12 +49,7 @@ impl TaggedNfaEngine {
 
     /// Finds the first match, returning (start, end).
     pub fn find(&self, input: &[u8]) -> Option<(usize, usize)> {
-        // Use fast step-based interpreter if pattern steps were extracted
-        if let Some(ref steps) = self.steps {
-            return TaggedNfa::find(steps, input);
-        }
-        // Fall back to PikeVm
-        self.pike_vm.find(input)
+        self.find_at(input, 0)
     }
 
     /// Finds a match starting at or after the given position.
@@ -64,7 +59,7 @@ impl TaggedNfaEngine {
     pub fn find_at(&self, input: &[u8], start: usize) -> Option<(usize, usize)> {
         // Use fast step-based interpreter if pattern steps were extracted
         if let Some(ref steps) = self.steps {
-            return TaggedNfa::find_at(steps, input, start);
+            return TaggedNfa::find_at_bounded(steps, &self.pike_vm, input, start);
         }
         // Fall back to PikeVm. `find_from`, not `find_at`: this method searches
         // at or after `start`, while `PikeVm::find_at` tries only `start` itself.
@@ -87,7 +82,7 @@ impl TaggedNfaEngine {
         }
         // Use fast step-based interpreter if pattern steps were extracted
         if let Some(ref steps) = self.steps {
-            return TaggedNfa::match_at(steps, input, pos).map(|end| (pos, end));
+            return TaggedNfa::match_at_bounded(steps, &self.pike_vm, input, pos);
         }
         // Fall back to PikeVm. `find_at`, not `find_from`: this method requires
         // the match to begin at `pos`, which is what `PikeVm::find_at` tries.

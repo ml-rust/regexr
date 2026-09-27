@@ -61,8 +61,21 @@ pub const CACHE_GROWTH_CEILING_FACTOR: usize = 4;
 /// that ones which scan to the end trip it within a handful of tries.
 ///
 /// Shared by [`LazyDfa::find_from`](super::interpreter::LazyDfa::find_from)
-/// and `EagerDfa::find_from`'s word-boundary metering, which mirrors it.
+/// and `EagerDfa::find_from`, through [`scan_budget`].
 pub(crate) const SCAN_BUDGET_FACTOR: usize = 4;
+
+/// The walked-byte budget of a start-by-start search of `input_len` bytes from
+/// `from`, for a pattern whose matches span at most `max_match_len` bytes.
+///
+/// An attempt of a pattern with a bounded match length never walks past that
+/// length, so trying every start already costs O(m·n), and does so at the
+/// speed of the DFA's table walk. The budget then covers that bound, and the
+/// fallback — whose own O(m·n) runs with a far larger constant when m is large
+/// (`a{50000}`) — is kept for patterns that can walk without limit.
+pub(crate) fn scan_budget(input_len: usize, from: usize, max_match_len: Option<usize>) -> usize {
+    let per_byte = SCAN_BUDGET_FACTOR.max(max_match_len.unwrap_or(0));
+    (input_len - from.min(input_len) + 1).saturating_mul(per_byte)
+}
 
 /// A lazy-DFA search stopped because the state cache could not grow further.
 ///

@@ -514,6 +514,228 @@ fn word_boundary_long_run_rejection_stays_linear() {
 }
 
 // =============================================================================
+// Every engine's search grows linearly with its input
+// =============================================================================
+// The engines that try one start position at a time go quadratic when every
+// attempt walks far before failing: `(?s)a.*b` over a run of `a` scans to the
+// end from every start. Each engine meters those attempts and hands an
+// expensive search to a linear-time one. The cases below time each search at
+// `n` and `4n` bytes: linear work grows about 4x, one scan per start about 16x.
+//
+// The engines expose no step counter, so the measurement is the fastest of
+// several runs, which drops a run the scheduler preempted. A pair of searches
+// that both finish in under `SCALING_FLOOR` is too fast for a ratio to mean
+// anything and passes; a quadratic search at `4n` is far above it.
+
+/// Input length `n` for the growth checks; each search also runs at `4n`.
+const GROWTH_INPUT: usize = 20_000;
+
+/// Largest accepted ratio of the `4n` time to the `n` time. Linear work gives
+/// 4 and one scan per start 16; this sits between them with room for noise.
+const MAX_GROWTH: f64 = 8.0;
+
+/// Below this, both timings are too small for their ratio to be measured.
+const SCALING_FLOOR: Duration = Duration::from_millis(2);
+
+/// The fastest of several runs of `search`.
+fn fastest(search: impl Fn()) -> Duration {
+    (0..5)
+        .map(|_| {
+            let started = Instant::now();
+            search();
+            started.elapsed()
+        })
+        .min()
+        .unwrap_or_default()
+}
+
+/// A search whose haystack is `head`, then `unit` repeated `n` times, then
+/// `tail`.
+struct GrowthCase {
+    pattern: &'static str,
+    head: &'static str,
+    unit: &'static str,
+    tail: &'static str,
+    /// The engine each build must select, so the case keeps exercising the
+    /// engine it was written for. `None` skips the check for that build.
+    interp_engine: Option<&'static str>,
+    jit_engine: Option<&'static str>,
+}
+
+impl GrowthCase {
+    const fn new(pattern: &'static str, unit: &'static str, tail: &'static str) -> Self {
+        Self {
+            pattern,
+            head: "",
+            unit,
+            tail,
+            interp_engine: None,
+            jit_engine: None,
+        }
+    }
+
+    const fn head(mut self, head: &'static str) -> Self {
+        self.head = head;
+        self
+    }
+
+    const fn engines(mut self, interp: &'static str, jit: &'static str) -> Self {
+        self.interp_engine = Some(interp);
+        self.jit_engine = Some(jit);
+        self
+    }
+}
+
+/// One of the searches a growth case times, named for failure messages.
+type TimedSearch<'a> = (&'static str, &'a dyn Fn(&str));
+
+/// Asserts that `find`, `find_iter`, `is_match` and `captures` on every build
+/// of each case grow linearly between `n` and `4n`.
+fn assert_linear_growth(cases: &[GrowthCase]) {
+    let mut failures = Vec::new();
+    for case in cases {
+        let small = format!(
+            "{}{}{}",
+            case.head,
+            case.unit.repeat(GROWTH_INPUT),
+            case.tail
+        );
+        let large = format!(
+            "{}{}{}",
+            case.head,
+            case.unit.repeat(4 * GROWTH_INPUT),
+            case.tail
+        );
+        for (label, re) in builds(case.pattern) {
+            let expected = if label == "jit" && cfg!(feature = "jit") {
+                case.jit_engine
+            } else {
+                case.interp_engine
+            };
+            if let Some(engine) = expected {
+                assert_eq!(re.engine_name(), engine, "{label} {:?}", case.pattern);
+            }
+            let searches: [TimedSearch; 4] = [
+                ("find", &|text| {
+                    std::hint::black_box(re.find(text));
+                }),
+                ("find_iter", &|text| {
+                    std::hint::black_box(re.find_iter(text).count());
+                }),
+                ("is_match", &|text| {
+                    std::hint::black_box(re.is_match(text));
+                }),
+                ("captures", &|text| {
+                    std::hint::black_box(re.captures(text).is_some());
+                }),
+            ];
+            for (op, search) in searches {
+                let at_n = fastest(|| search(&small));
+                let at_4n = fastest(|| search(&large));
+                let growth = at_4n.as_secs_f64() / at_n.as_secs_f64().max(1e-9);
+                if at_4n >= SCALING_FLOOR && growth > MAX_GROWTH {
+                    failures.push(format!(
+                        "{label} {} {:?} {op}: {at_n:?} at n, {at_4n:?} at 4n ({growth:.1}x)",
+                        re.engine_name(),
+                        case.pattern
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "superlinear growth:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// The eager DFA: its start-by-start loop over patterns whose attempts run to
+/// the end of a run of `a`.
+#[test]
+fn eager_dfa_search_grows_linearly() {
+    bounded_within("eager_dfa_search_grows_linearly", SCALING_DEADLINE, || {
+        assert_linear_growth(&[
+            GrowthCase::new(r"(?s)a.*b", "a", "").engines("EagerDfa", "EagerDfa"),
+            GrowthCase::new(r"a.*b", "a", "").engines("EagerDfa", "EagerDfa"),
+            GrowthCase::new(r"[^b]*b", "a", "").engines("EagerDfa", "EagerDfa"),
+            GrowthCase::new(r"(?is)a.*b", "a", "").engines("EagerDfa", "EagerDfa"),
+            GrowthCase::new(r"(?i)a.*b", "a", "").engines("EagerDfa", "EagerDfa"),
+            GrowthCase::new(r"(?i)[^b]*b", "a", "").engines("EagerDfa", "EagerDfa"),
+            // A `b` ahead of the run defeats the required-literal rejection,
+            // so the search itself has to prove there is no match.
+            GrowthCase::new(r"a.*b", "a", "")
+                .head("b")
+                .engines("EagerDfa", "EagerDfa"),
+            GrowthCase::new(r"(?s)a.*b", "a", "")
+                .head("b")
+                .engines("EagerDfa", "EagerDfa"),
+            GrowthCase::new(r"\w+\s", "a", "").engines("EagerDfa", "EagerDfa"),
+            GrowthCase::new(r"\ba[a-z]*\d", "a", "").engines("EagerDfa", "EagerDfa"),
+        ]);
+    });
+}
+
+/// The PikeVM: one pass by construction, checked on the alternation shapes
+/// engine selection sends it.
+#[test]
+fn pikevm_search_grows_linearly() {
+    bounded_within("pikevm_search_grows_linearly", SCALING_DEADLINE, || {
+        assert_linear_growth(&[
+            GrowthCase::new(r"(?:a|aa)*c", "a", "").engines("PikeVm", "PikeVm"),
+            GrowthCase::new(r"(?i)(?:a|aa)*c", "a", "").engines("PikeVm", "PikeVm"),
+        ]);
+    });
+}
+
+/// Shift-Or, interpreted and JIT-compiled: its start-by-start loop, including
+/// a match past the long run so the earliest-end bound does not end the scan.
+#[test]
+fn shift_or_search_grows_linearly() {
+    bounded_within("shift_or_search_grows_linearly", SCALING_DEADLINE, || {
+        assert_linear_growth(&[
+            GrowthCase::new(r"\w+z", "a", "").engines("ShiftOr", "JitShiftOr"),
+            GrowthCase::new(r"(?i)\w+z", "a", "").engines("ShiftOr", "JitShiftOr"),
+            GrowthCase::new(r"[a-z]+\d", "a", "").engines("ShiftOr", "JitShiftOr"),
+            GrowthCase::new(r"a[a-z]*!", "a", "9a!"),
+            GrowthCase::new(r"(a+)+$", "a", "!"),
+            GrowthCase::new(r"x[a-z]*y{70}", "x", "!").engines("ShiftOrWide", "Jit"),
+        ]);
+    });
+}
+
+/// The lazy DFA and the DFA JIT: anchored patterns the lazy DFA keeps, and a
+/// prefix-literal pattern the JIT build compiles to native code.
+#[test]
+fn lazy_dfa_and_dfa_jit_search_grows_linearly() {
+    bounded_within(
+        "lazy_dfa_and_dfa_jit_search_grows_linearly",
+        SCALING_DEADLINE,
+        || {
+            assert_linear_growth(&[
+                GrowthCase::new(r"a.*b$", "a", "").engines("LazyDfa", "LazyDfa"),
+                GrowthCase::new(r"(?m)^a.*b$", "a", "").engines("LazyDfa", "LazyDfa"),
+                GrowthCase::new(r"x[a-z]*y", "x", "!").engines("ShiftOr", "Jit"),
+            ]);
+        },
+    );
+}
+
+/// The tagged-NFA interpreter: greedy runs it retries at every start and
+/// backtracks into, the second shape cubic before its work was metered.
+#[test]
+fn tagged_nfa_search_grows_linearly() {
+    bounded_within("tagged_nfa_search_grows_linearly", SCALING_DEADLINE, || {
+        assert_linear_growth(&[
+            GrowthCase::new(r"\p{L}+z", "a", "9z").engines("TaggedNfa", "TaggedNfa"),
+            GrowthCase::new(r"\p{L}+a\p{L}*z", "a", "9z").engines("TaggedNfa", "TaggedNfa"),
+            GrowthCase::new(r"a\p{L}*z", "a", "9z").engines("TaggedNfa", "TaggedNfa"),
+            GrowthCase::new(r"\w+(?=z)", "x", "!z").engines("TaggedNfa", "TaggedNfa"),
+        ]);
+    });
+}
+
+// =============================================================================
 // Parsing does not overflow the stack on deeply nested patterns
 // =============================================================================
 // The parser is mutually recursive with no explicit stack, so a pattern that

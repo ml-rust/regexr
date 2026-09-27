@@ -20,6 +20,7 @@ use crate::vm::{
 use crate::jit;
 
 use super::dfa_pool::LazyDfaPool;
+use super::linear::LinearFallback;
 use super::{needs_boundary_aware_empty_match, select_engine, select_engine_from_hir, EngineType};
 
 /// Runs `search` on `dfa` when the caller already checked one out, or checks
@@ -54,18 +55,6 @@ fn lazy_dfa_or_pikevm<T>(
         Ok(result) => result,
         Err(_) => fallback(&PikeVm::from_arc(dfa.nfa_arc())),
     }
-}
-
-/// Builds the `LazyDfa` used to re-run a search after `EagerDfa::find_from`
-/// gives up on its scan budget (see [`EagerScanBudgetExceeded`]).
-///
-/// Cache limit is unbounded here because this fallback is only reached once
-/// per query, on the already-rare metered path, so there is no repeated-flush
-/// cost to bound against.
-fn eager_scan_fallback(nfa: &Arc<Nfa>) -> LazyDfa {
-    let mut fallback = LazyDfa::new((**nfa).clone());
-    fallback.set_cache_limit(usize::MAX);
-    fallback
 }
 
 /// A compiled regex ready for execution.
@@ -152,10 +141,9 @@ enum CompiledInner {
     /// Pre-materialized DFA for fast matching without JIT.
     /// Used for patterns that benefit from eager state computation.
     ///
-    /// The `Arc<Nfa>` is kept alongside so the unanchored search can hand off
-    /// to a fresh `LazyDfa` on [`EagerScanBudgetExceeded`] without rebuilding
-    /// the NFA — see [`lazy_dfa_or_pikevm`].
-    EagerDfa(EagerDfa, Arc<Nfa>),
+    /// The fallback takes over a search that gives up on its scan budget
+    /// (see [`EagerScanBudgetExceeded`]).
+    EagerDfa(EagerDfa, LinearFallback),
     /// Fast codepoint-level matching for single character class patterns.
     CodepointClass(CodepointClassMatcher),
     /// Backtracking VM engine for patterns with backreferences.
@@ -194,11 +182,20 @@ enum CompiledInner {
 /// hand the rest of the input to it. This tracks how many attempts have failed
 /// and how much input they span: past [`MAX_ATTEMPTS`], a prefilter still
 /// keeping more than one position in [`MIN_SELECTIVITY`] is not filtering, and
-/// the handoff is taken. A prefilter that is genuinely selective never trips it
-/// and keeps the candidate loop for the whole search.
+/// the handoff is taken.
+///
+/// A selective prefilter is not enough on its own: `x[^y]*y` over text with an
+/// `x` every few dozen bytes and no `y` keeps few candidates, yet every attempt
+/// walks to the end. So the bytes the attempts walk are metered too, and the
+/// handoff is taken once they pass [`crate::dfa::lazy::scan_budget`], the same
+/// budget the engines' own start-by-start loops use. A prefilter whose
+/// candidates fail fast never trips either rule and keeps the candidate loop
+/// for the whole search.
 struct PrefilterDrive {
     attempts: usize,
     first_candidate: usize,
+    walked: usize,
+    budget: usize,
 }
 
 /// Failed attempts to allow before the selectivity of a prefilter is judged.
@@ -222,22 +219,34 @@ enum OnePassSearch<T> {
 }
 
 impl PrefilterDrive {
-    fn new() -> Self {
+    /// A drive over candidates in `input` at or after `from`.
+    fn new(input: &[u8], from: usize) -> Self {
         Self {
             attempts: 0,
             first_candidate: 0,
+            walked: 0,
+            budget: crate::dfa::lazy::scan_budget(input.len(), from, None),
         }
     }
 
-    /// Records a failed attempt at `candidate`. Returns true when the caller
+    /// Records a failed attempt at `candidate` that walked to `reach`, or to an
+    /// unknown point when `reach` is `None`. Returns true when the caller
     /// should abandon the loop and search from `candidate` with the engine.
-    fn give_up(&mut self, candidate: usize) -> bool {
+    ///
+    /// Without a reach, the walk cannot be metered, so the loop stops after
+    /// [`MAX_ATTEMPTS`] failures however selective the prefilter is.
+    fn give_up(&mut self, candidate: usize, reach: Option<usize>) -> bool {
         if self.attempts == 0 {
             self.first_candidate = candidate;
         }
         self.attempts += 1;
-        self.attempts > MAX_ATTEMPTS
-            && self.attempts * MIN_SELECTIVITY > candidate - self.first_candidate + 1
+        let Some(reach) = reach else {
+            return self.attempts > MAX_ATTEMPTS;
+        };
+        self.walked = self.walked.saturating_add(reach.saturating_sub(candidate));
+        self.walked > self.budget
+            || (self.attempts > MAX_ATTEMPTS
+                && self.attempts * MIN_SELECTIVITY > candidate - self.first_candidate + 1)
     }
 }
 
@@ -348,12 +357,13 @@ impl CompiledRegex {
                     None => false,
                 };
             }
-            let mut drive = PrefilterDrive::new();
+            let mut drive = PrefilterDrive::new(input, 0);
             for candidate in self.prefilter.find_candidates(input) {
-                if self.is_match_at(input, candidate) {
+                let (found, reach) = self.find_at_pos_reach(input, candidate, None);
+                if found.is_some() {
                     return true;
                 }
-                if drive.give_up(candidate) {
+                if drive.give_up(candidate, reach) {
                     return self
                         .find_engine_from_boundary(input, candidate, None)
                         .is_some();
@@ -374,16 +384,9 @@ impl CompiledRegex {
                     |vm| vm.is_match(input),
                 )
             }),
-            CompiledInner::EagerDfa(dfa, nfa) => match dfa.find(input) {
+            CompiledInner::EagerDfa(dfa, linear) => match dfa.find(input) {
                 Ok(found) => found.is_some(),
-                Err(EagerScanBudgetExceeded) => {
-                    let mut fallback = eager_scan_fallback(nfa);
-                    lazy_dfa_or_pikevm(
-                        &mut fallback,
-                        |d| d.find(input).map(|found| found.is_some()),
-                        |vm| vm.is_match(input),
-                    )
-                }
+                Err(EagerScanBudgetExceeded) => linear.find_from(input, 0).is_some(),
             },
             CompiledInner::CodepointClass(matcher) => matcher.is_match(input),
             CompiledInner::BacktrackingVm(vm) => vm.find(input).is_some(),
@@ -494,8 +497,8 @@ impl CompiledRegex {
         // repeated here rather than falling back into the generic path for the
         // retry.
         if self.simple_eager_scan {
-            if let CompiledInner::EagerDfa(eager, _) = &self.inner {
-                return Self::find_from_simple_scan(eager, input, from);
+            if let CompiledInner::EagerDfa(eager, linear) = &self.inner {
+                return Self::find_from_simple_scan(eager, linear, input, from);
             }
         }
         self.find_from_generic(input, from, dfa)
@@ -510,12 +513,16 @@ impl CompiledRegex {
     /// measurably even though it never executes this.
     fn find_from_simple_scan(
         eager: &EagerDfa,
+        linear: &LinearFallback,
         input: &[u8],
         from: usize,
     ) -> Option<(usize, usize)> {
         let mut from = from;
         loop {
-            let (start, end) = eager.find_from_simple(input, from)?;
+            let (start, end) = match eager.find_from_simple(input, from) {
+                Ok(found) => found?,
+                Err(EagerScanBudgetExceeded) => linear.find_from(input, from)?,
+            };
             if crate::nfa::is_utf8_boundary(input, start) {
                 return Some((start, end));
             }
@@ -599,15 +606,16 @@ impl CompiledRegex {
                     .find_map(match_start)?;
                 return self.find_engine_from(input, first, dfa);
             }
-            let mut drive = PrefilterDrive::new();
+            let mut drive = PrefilterDrive::new(input, from);
             for candidate in self.prefilter.find_candidates_from(input, scan_from) {
                 let Some(start) = match_start(candidate) else {
                     continue;
                 };
-                if let Some(result) = self.find_at_pos(input, start, dfa.as_deref_mut()) {
-                    return Some(result);
+                let (found, reach) = self.find_at_pos_reach(input, start, dfa.as_deref_mut());
+                if found.is_some() {
+                    return found;
                 }
-                if drive.give_up(start) {
+                if drive.give_up(start, reach) {
                     // The caller applies the codepoint-boundary rule.
                     return self.find_engine_from(input, start, dfa);
                 }
@@ -660,16 +668,9 @@ impl CompiledRegex {
                     |vm| vm.find_from(input, from),
                 )
             }),
-            CompiledInner::EagerDfa(dfa, nfa) => match dfa.find_from(input, from) {
+            CompiledInner::EagerDfa(dfa, linear) => match dfa.find_from(input, from) {
                 Ok(result) => result,
-                Err(EagerScanBudgetExceeded) => {
-                    let mut fallback = eager_scan_fallback(nfa);
-                    lazy_dfa_or_pikevm(
-                        &mut fallback,
-                        |d| d.find_from(input, from),
-                        |vm| vm.find_from(input, from),
-                    )
-                }
+                Err(EagerScanBudgetExceeded) => linear.find_from(input, from),
             },
             CompiledInner::CodepointClass(matcher) => matcher.find_from(input, from),
             CompiledInner::BacktrackingVm(vm) => vm.find_at(input, from),
@@ -943,7 +944,9 @@ impl CompiledRegex {
         let mut scratch = vec![None; one_pass.slot_count()];
         let mut slots = vec![None; one_pass.slot_count()];
 
-        let mut drive = PrefilterDrive::new();
+        // `OnePass` reports no reach for a failed attempt, so this loop is
+        // capped by attempts alone.
+        let mut drive = PrefilterDrive::new(input, from);
         for candidate in candidates {
             // A match never starts inside a codepoint; `find_from` applies the
             // same rule to the engines' answers.
@@ -953,19 +956,56 @@ impl CompiledRegex {
             if one_pass.captures_at_into(input, candidate, &mut scratch, &mut slots) {
                 return OnePassSearch::Match(slots);
             }
-            if drive.give_up(candidate) {
+            if drive.give_up(candidate, None) {
                 return OnePassSearch::GaveUp(candidate);
             }
         }
         OnePassSearch::NoMatch
     }
 
-    /// Check if there's a match starting at `pos`.
+    /// [`CompiledRegex::find_at_pos`], also reporting how far the attempt
+    /// walked, for the candidate loops that meter their attempts.
     ///
-    /// This method passes the full input to allow engines to check context
-    /// (e.g., for word boundary assertions).
-    fn is_match_at(&self, input: &[u8], pos: usize) -> bool {
-        self.find_at_pos(input, pos, None).is_some()
+    /// Only the engines driven candidate by candidate (see
+    /// [`CompiledRegex::engine_searches_single_pass`]) report a reach; the
+    /// rest answer `None`, which the meter reads as "unknown".
+    fn find_at_pos_reach(
+        &self,
+        input: &[u8],
+        pos: usize,
+        dfa: Option<&mut LazyDfa>,
+    ) -> (Option<(usize, usize)>, Option<usize>) {
+        if pos > input.len() {
+            return (None, Some(pos));
+        }
+        match &self.inner {
+            CompiledInner::ShiftOr(so) => {
+                let (found, reach) = so.try_match_at_reach(input, pos);
+                (found, Some(reach))
+            }
+            CompiledInner::ShiftOrWide(so) => {
+                let (found, reach) = so.try_match_at_reach(input, pos);
+                (found, Some(reach))
+            }
+            CompiledInner::EagerDfa(eager, _) => {
+                let (end, reach) = eager.find_at_reach(input, pos);
+                (end.map(|end| (pos, end)), Some(reach))
+            }
+            CompiledInner::LazyDfa(pool) => {
+                with_lazy_dfa(pool, dfa, |lazy| match lazy.find_at_reach(input, pos) {
+                    Ok((end, reach)) => (end.map(|end| (pos, end)), Some(reach)),
+                    Err(CacheCeilingExceeded) => {
+                        (PikeVm::from_arc(lazy.nfa_arc()).find_at(input, pos), None)
+                    }
+                })
+            }
+            #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
+            CompiledInner::JitShiftOr(jit) => {
+                let (found, reach) = jit.try_match_at_reach(input, pos);
+                (found, Some(reach))
+            }
+            _ => (self.find_at_pos(input, pos, dfa), None),
+        }
     }
 
     /// Find a match starting exactly at `pos`.
@@ -1153,6 +1193,19 @@ pub fn compile(nfa: Nfa) -> Result<CompiledRegex> {
     })
 }
 
+/// Whether the tagged-NFA JIT runs `nfa` in time linear in the input: its step
+/// program exists and repeats nothing without bound (see
+/// [`crate::nfa::tagged::has_unbounded_repetition`]).
+///
+/// The JIT has no step program to run otherwise and declines the pattern, so
+/// answering false there changes nothing.
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn tagged_jit_is_linear(nfa: &Nfa) -> bool {
+    crate::nfa::tagged::StepExtractor::new(nfa)
+        .extract()
+        .is_some_and(|steps| !crate::nfa::tagged::has_unbounded_repetition(&steps))
+}
+
 /// Builds the tagged-NFA interpreter for `hir` from its already-compiled `nfa`.
 ///
 /// Shared by every route that lands on the tagged interpreter — lookaround,
@@ -1331,10 +1384,13 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
                 // EagerDfa pre-computes all states upfront, eliminating hash lookups.
                 let mut lazy = LazyDfa::new(nfa);
                 // Already held by `lazy`; cloning the Arc (not the Nfa) so the
-                // scan-budget give-up can rebuild a `LazyDfa` without recompiling.
+                // scan-budget give-up can build its DFA without recompiling.
                 let nfa_arc = lazy.nfa_arc();
                 match EagerDfa::from_lazy(&mut lazy) {
-                    Ok(eager) => (CompiledInner::EagerDfa(eager, nfa_arc), capture_nfa),
+                    Ok(eager) => (
+                        CompiledInner::EagerDfa(eager, LinearFallback::new(Arc::clone(&nfa_arc))),
+                        capture_nfa,
+                    ),
                     Err(_) => {
                         // Materialization declined (see
                         // EagerMaterializationBudgetExceeded): fall back to a
@@ -1365,10 +1421,13 @@ pub fn compile_from_hir(hir: &Hir) -> Result<CompiledRegex> {
             } else {
                 let mut lazy = LazyDfa::new(nfa);
                 // Already held by `lazy`; cloning the Arc (not the Nfa) so the
-                // scan-budget give-up can rebuild a `LazyDfa` without recompiling.
+                // scan-budget give-up can build its DFA without recompiling.
                 let nfa_arc = lazy.nfa_arc();
                 match EagerDfa::from_lazy(&mut lazy) {
-                    Ok(eager) => (CompiledInner::EagerDfa(eager, nfa_arc), capture_nfa),
+                    Ok(eager) => (
+                        CompiledInner::EagerDfa(eager, LinearFallback::new(Arc::clone(&nfa_arc))),
+                        capture_nfa,
+                    ),
                     Err(_) => {
                         // Materialization declined (see
                         // EagerMaterializationBudgetExceeded): fall back to a
@@ -1529,6 +1588,12 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
         let literals = extract_literals(hir);
         let prefilter = Prefilter::from_literals(&literals);
         let nfa = nfa::compile(hir)?;
+        // The generated code retries every start with no budget on its work;
+        // a program that repeats without bound stays on the metered
+        // interpreter, which hands a runaway search to the PikeVM.
+        if !tagged_jit_is_linear(&nfa) {
+            return Ok(compile_tagged_nfa_interp(hir, nfa));
+        }
         match jit::compile_tagged_nfa(&nfa) {
             Ok(engine) => {
                 return Ok(CompiledRegex {
@@ -1620,6 +1685,12 @@ pub fn compile_with_jit(hir: &Hir) -> Result<CompiledRegex> {
         let literals = extract_literals(hir);
         let prefilter = Prefilter::from_literals(&literals);
         let nfa = nfa::compile(hir)?;
+        // The generated code retries every start with no budget on its work;
+        // a program that repeats without bound stays on the metered
+        // interpreter, which hands a runaway search to the PikeVM.
+        if !tagged_jit_is_linear(&nfa) {
+            return Ok(compile_tagged_nfa_interp(hir, nfa));
+        }
         match jit::compile_tagged_nfa(&nfa) {
             Ok(engine) => {
                 return Ok(CompiledRegex {

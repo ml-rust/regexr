@@ -130,15 +130,23 @@ pub fn compile_states(
         emit_dispatch(&mut asm, dispatch, dfa.start, start_word, &state_labels)?;
     }
 
-    // Emit code for each DFA state
+    // Emit code for each DFA state. A state an attempt can only be in before
+    // its second byte dies to the uncharged restart; see `emit_dead_state`.
+    let dead_first_label = asm.new_dynamic_label();
     for state in &dfa.states {
-        emit_state(&mut asm, state, &state_labels, dead_label, no_match_label)?;
+        let dead = if dfa.dies_on_first_byte(state.id) {
+            dead_first_label
+        } else {
+            dead_label
+        };
+        emit_state(&mut asm, state, &state_labels, dead, no_match_label)?;
     }
 
     // Emit dead state - for unanchored, this restarts search at next position
     emit_dead_state(
         &mut asm,
         dead_label,
+        dead_first_label,
         no_match_label,
         restart_label,
         dispatch_label,
@@ -178,6 +186,7 @@ pub fn compile_states(
 /// - rdx = input end pointer (base + len)
 /// - r10 = last match end position (initialized to -1)
 /// - r11 = search start position (for unanchored search, tracks where current attempt began)
+/// - r8 = bytes the failed attempts of an unanchored search may still walk
 /// - r13 = prev_char_class (0 = NonWord, 1 = Word) for word boundary patterns
 /// - Jump to the specified start state
 ///
@@ -264,6 +273,16 @@ fn emit_prologue(
             ; xor r11, r11
         );
     }
+
+    // Walk budget for the restarts: 4 * (len + 1). Each failed attempt is
+    // charged the bytes it walked; past the budget the scan stops and the
+    // caller takes over with a linear-time search.
+    dynasm!(asm
+        ; .arch x64
+        ; mov r8, rdx
+        ; sub r8, rsi
+        ; lea r8, [r8*4 + 4]
+    );
 
     // For word boundary patterns, initialize r13 = prev_char_class
     // r13 = 0 means NonWord (start of input or after non-word char)
@@ -929,9 +948,17 @@ fn compute_byte_ranges(state: &MaterializedState) -> Vec<(u8, u8, DfaStateId)> {
 ///
 /// This implements "find" semantics where we scan through the input looking for
 /// any match, not just a match at position 0.
+///
+/// An unanchored attempt that dies at `dead_label` is first charged the bytes
+/// it walked against the budget in r8. Past the budget the code stops as if
+/// the attempt had reached the end of the input, so the caller resumes at the
+/// next start with a linear-time search. `dead_first_label` is the entry for
+/// attempts that read only their first byte (see
+/// `MaterializedDfa::dies_on_first_byte`) and skips the charge.
 fn emit_dead_state(
     asm: &mut Assembler,
     dead_label: DynamicLabel,
+    dead_first_label: DynamicLabel,
     no_match_label: DynamicLabel,
     restart_label: Option<DynamicLabel>,
     dispatch_label: Option<DynamicLabel>,
@@ -948,6 +975,11 @@ fn emit_dead_state(
         // First check if we already have a match saved
         dynasm!(asm
             ; .arch x64
+            ; mov rax, rdi
+            ; sub rax, r11
+            ; sub r8, rax
+            ; jb =>no_match_label  // Over budget: return the match or stop
+            ; =>dead_first_label
             ; cmp r10, 0
             ; jge =>no_match_label  // If we have a saved match, return it
             // No match yet - advance search position
@@ -1023,6 +1055,7 @@ fn emit_dead_state(
         // Anchored: no retry, just go to no_match
         dynasm!(asm
             ; .arch x64
+            ; =>dead_first_label
             ; jmp =>no_match_label
         );
     }

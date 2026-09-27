@@ -3,8 +3,10 @@
 //! `jit_must_defer` decides which step programs the JIT may emit. Loosening it
 //! trades a guaranteed-correct interpreter for generated code, so every shape it
 //! now admits — greedy quantifiers carrying their own lookahead — is compared
-//! against the interpreter here. A divergence means the guard was loosened too
-//! far, not that a test is too strict.
+//! against the interpreter here, both through engine selection and compiled
+//! directly (selection keeps programs that repeat without bound on the
+//! interpreter). A divergence means the guard was loosened too far, not that a
+//! test is too strict.
 //!
 //! The engine-name assertions need the `jit` feature; the agreement sweep does
 //! not and runs in every configuration.
@@ -272,6 +274,65 @@ fn tagged_jit_agrees_with_its_interpreter() {
     );
 }
 
+/// The generated code itself, compiled directly, agrees with its interpreter.
+///
+/// Engine selection keeps every program that repeats without bound off the
+/// tagged JIT (see `greedy_with_attached_lookahead_stays_on_the_interpreter`),
+/// so the sweep above compares such patterns on the interpreter twice. The
+/// code generator still accepts them through `jit::compile_tagged_nfa`, and
+/// this holds that code to the same answers.
+#[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
+#[test]
+fn directly_compiled_tagged_jit_agrees_with_its_interpreter() {
+    use regexr::nfa::tagged::TaggedNfaEngine;
+
+    let mut divergences = Vec::new();
+    let mut compared = 0usize;
+
+    for pattern in PATTERNS {
+        let Ok(hir) = regexr::parser::parse(pattern).and_then(|ast| regexr::hir::translate(&ast))
+        else {
+            continue;
+        };
+        let Ok(nfa) = regexr::nfa::compile(&hir) else {
+            continue;
+        };
+        let Ok(jitted) = regexr::jit::compile_tagged_nfa(&nfa) else {
+            continue;
+        };
+        let interpreted = TaggedNfaEngine::new(nfa);
+
+        for input in INPUTS {
+            let bytes = input.as_bytes();
+            compared += 1;
+            let a = interpreted.find(bytes);
+            let b = jitted.find(bytes);
+            if a != b {
+                divergences.push(format!(
+                    "  {pattern:?} on {input:?}: interpreter={a:?} jit={b:?}"
+                ));
+                continue;
+            }
+            let ca = interpreted.captures(bytes);
+            let cb = jitted.captures(bytes);
+            if ca != cb {
+                divergences.push(format!(
+                    "  {pattern:?} on {input:?} captures: interpreter={ca:?} jit={cb:?}"
+                ));
+            }
+        }
+    }
+
+    assert!(compared > 0, "no pattern/input pair was compared");
+    assert!(
+        divergences.is_empty(),
+        "{} of {compared} comparisons disagree between the directly compiled \
+         tagged-NFA JIT and its interpreter:\n{}",
+        divergences.len(),
+        divergences.join("\n")
+    );
+}
+
 /// A pattern that can match empty must still end its search.
 ///
 /// The unanchored loop bounds itself on `len - start_pos`, which wraps once
@@ -323,19 +384,21 @@ fn generic_backtracking_shapes_stay_on_the_interpreter() {
     }
 }
 
-/// A greedy quantifier carrying its own lookahead must reach the JIT.
+/// A greedy quantifier stays on the interpreter, lookahead or not.
 ///
-/// This is the point of the loosened guard: without it `\w+(?=ing\b)` silently
-/// ran on the interpreter even with the JIT requested.
+/// The generated code retries every start and backtracks every run with no
+/// budget on its work, so `a+(?=b)` over a long run of `a` costs one scan of
+/// the run per start. The interpreter meters that work and hands a runaway
+/// search to the PikeVM, which keeps the search linear.
 #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[test]
-fn greedy_with_attached_lookahead_is_jit_compiled() {
+fn greedy_with_attached_lookahead_stays_on_the_interpreter() {
     for pattern in [r"\w+(?=ing\b)", r"a+(?=b)", r"[ab]+(?=c)", r"[0-9]+(?=px)"] {
         let jitted = RegexBuilder::new(pattern).jit(true).build().unwrap();
         assert_eq!(
             jitted.engine_name(),
-            "TaggedNfaJit",
-            "{pattern} carries its lookahead in one step and should be JIT-compiled"
+            "TaggedNfa",
+            "{pattern} repeats without bound and must not be JIT-compiled"
         );
     }
 }
@@ -400,23 +463,18 @@ fn greedy_star_recognition_does_not_swallow_alternation() {
     }
 }
 
-/// A nullable greedy run carrying a lookahead must reach the JIT.
-///
-/// This is the point of teaching the JIT's own step extractor the `X*` shape:
-/// `\w*(?=ing)` previously extracted as an `Alt` whose branch ended on a
-/// lookaround compiled onto the match state, which the walk could not represent,
-/// so the pattern silently ran on the interpreter even with the JIT requested —
-/// while `\w+(?=ing\b)` right next to it was compiled.
+/// A nullable greedy run carrying a lookahead stays on the metered
+/// interpreter, for the reason given in
+/// `greedy_with_attached_lookahead_stays_on_the_interpreter`; without one it
+/// still reaches a JIT engine.
 #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
 #[test]
-fn nullable_greedy_run_is_jit_compiled() {
-    // The lookahead keeps this on the tagged engine, so it names the tagged JIT
-    // specifically — that is the selection this change is about.
+fn nullable_greedy_run_engine_selection() {
     let jitted = RegexBuilder::new(r"\w*(?=ing)").jit(true).build().unwrap();
     assert_eq!(
         jitted.engine_name(),
-        "TaggedNfaJit",
-        r"\w*(?=ing) is a recognised greedy star and should reach the tagged JIT"
+        "TaggedNfa",
+        r"\w*(?=ing) repeats without bound and must not reach the tagged JIT"
     );
 
     // Without an assertion to satisfy, a recognised star is free to take a

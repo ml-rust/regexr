@@ -314,3 +314,70 @@ fn generated_alternations_match_regex_crate() {
 fn generated_assertions_match_regex_crate() {
     sweep(0xD1B5_4A32_D192_ED03, 3000, true);
 }
+
+/// Haystacks long enough that trying one start at a time runs out of its scan
+/// budget, so the linear-time searches the engines hand over to decide the
+/// answer: the reversed-pattern DFA pass, Shift-Or's backward pass and the
+/// PikeVM.
+#[test]
+fn searches_past_the_scan_budget_match_regex_crate() {
+    let run = |unit: &str, n: usize| unit.repeat(n);
+    let fixed: Vec<(&str, String)> = vec![
+        (r"a.*b", format!("b{}\u{1}ab", run("a", 400))),
+        (r"(?s)a.*b", run("a", 400)),
+        (r"(?i)a.*b", format!("{}!ab", run("A", 400))),
+        (r"\w+z", format!("{} az", run("a", 400))),
+        (r"(?i)\w+z", format!("{} aZ", run("a", 400))),
+        (r"[a-z]+\d", format!("{} a1", run("a", 400))),
+        (r"x[a-z]*y", format!("{}!xy", run("x", 400))),
+        (r"a[a-z]*!", format!("{}9a!", run("a", 400))),
+        (r"\ba[a-z]*\d", format!("{} a1", run("a", 400))),
+        (r"\w+\s", run("a", 400)),
+        (r"a+$", format!("{}!a", run("a", 400))),
+        (r"a.*b$", format!("{}c", run("a", 400))),
+        (
+            r"(?m)^a.*b$",
+            format!("{}ab", run(&format!("{}\n", run("a", 40)), 12)),
+        ),
+        (r"(?:ab)+c", format!("{}ab!abc", run("ab", 300))),
+        (r"\p{L}+z", format!("{}9az", run("a", 400))),
+        (r"a\p{L}*z", format!("{}9az", run("a", 400))),
+        (r"\p{L}+a\p{L}*z", format!("{}9aaz", run("a", 300))),
+        (
+            r"x[a-z]*y{70}",
+            format!("{}!x{}", run("x", 400), run("y", 70)),
+        ),
+    ];
+    let mut diffs = Vec::new();
+    for (pattern, hay) in &fixed {
+        diffs.extend(mismatches(pattern, &[hay.as_str(), &hay[1..]]));
+    }
+
+    let mut rng = Rng(0x2545_F491_4F6C_DD1D);
+    const UNITS: &[&str] = &["s", "se", "a", ":", "sS", "c ", "sec", "e"];
+    for round in 0..1500 {
+        let with_assertions = round % 3 == 0;
+        let body = branch(&mut rng, with_assertions);
+        let pattern = if round % 4 == 0 {
+            format!("(?i){body}")
+        } else {
+            body
+        };
+        let mut owned = Vec::new();
+        for _ in 0..4 {
+            let unit = rng.pick(UNITS);
+            let count = 60 + rng.below(240);
+            owned.push(format!("{}{}", unit.repeat(count), haystack(&mut rng)));
+        }
+        let haystacks: Vec<&str> = owned.iter().map(String::as_str).collect();
+        diffs.extend(mismatches(&pattern, &haystacks));
+    }
+
+    let shown = diffs.len().min(20);
+    assert!(
+        diffs.is_empty(),
+        "{} disagreements with the regex crate, first {shown}:\n{}",
+        diffs.len(),
+        diffs[..shown].join("\n")
+    );
+}

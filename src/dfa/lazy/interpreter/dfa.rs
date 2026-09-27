@@ -30,16 +30,19 @@ use crate::nfa::{Nfa, NfaInstruction, StateId as NfaStateId};
 use super::super::shared::{
     epsilon_closure_subset, epsilon_closure_with_context, flush_cache,
     get_or_create_state_with_class, is_dead_state, is_tagged_match, is_unknown_state,
-    match_reachable_without_end_assertion, state_index, tag_state, untag_state,
+    match_reachable_without_end_assertion, scan_budget, state_index, tag_state, untag_state,
     CacheCeilingExceeded, CharClass, DfaStateId, LazyDfaContext, NfaSubset, PositionContext,
-    DEAD_STATE, SCAN_BUDGET_FACTOR, UNKNOWN_STATE,
+    DEAD_STATE, UNKNOWN_STATE,
 };
+use super::linear::ReverseDfa;
 
 /// A lazy DFA that builds states on demand.
 #[derive(Debug, Clone)]
 pub struct LazyDfa {
     /// Internal context containing state and transition data.
-    ctx: LazyDfaContext,
+    pub(super) ctx: LazyDfaContext,
+    /// The reversed-pattern DFA for [`LazyDfa::find_from_linear`].
+    pub(super) reverse: ReverseDfa,
 }
 
 /// Holds a [`LazyDfa`] for the duration of one search.
@@ -52,18 +55,18 @@ pub struct LazyDfa {
 /// search unwinds, which is what keeps a panic from suppressing flushes forever.
 ///
 /// Searches may nest, hence a depth count rather than a flag.
-struct SearchGuard<'a> {
+pub(super) struct SearchGuard<'a> {
     dfa: &'a mut LazyDfa,
 }
 
 impl<'a> SearchGuard<'a> {
-    fn new(dfa: &'a mut LazyDfa) -> Self {
+    pub(super) fn new(dfa: &'a mut LazyDfa) -> Self {
         dfa.ctx.search_depth += 1;
         Self { dfa }
     }
 
     /// Reports the search's result, unless it gave up on the cache ceiling.
-    fn finish<T>(self, outcome: T) -> Result<T, CacheCeilingExceeded> {
+    pub(super) fn finish<T>(self, outcome: T) -> Result<T, CacheCeilingExceeded> {
         if std::mem::take(&mut self.dfa.ctx.ceiling_exceeded) {
             Err(CacheCeilingExceeded)
         } else {
@@ -100,6 +103,7 @@ impl LazyDfa {
     pub fn new(nfa: Nfa) -> Self {
         Self {
             ctx: LazyDfaContext::new(nfa),
+            reverse: ReverseDfa::Unbuilt,
         }
     }
 
@@ -844,6 +848,18 @@ impl LazyDfa {
         // Only optimize with line-boundary-only search if we have ONLY a start anchor.
         let start_only = self.ctx.has_start_anchor && !self.ctx.has_end_anchor;
 
+        // Trying one start at a time is right while the attempts are cheap:
+        // most give up within a byte or two of where they began, and the first
+        // one that matches ends the search. It collapses when they are not — a
+        // pattern that consumes a long run before failing costs a full scan per
+        // start, and the search turns quadratic.
+        //
+        // So the attempts are metered. Once they have collectively walked
+        // several times the input, the pattern is one of those, and the
+        // linear-time search takes over from the next start.
+        let budget = scan_budget(input.len(), from, self.ctx.nfa.max_match_len);
+        let mut walked = 0usize;
+
         if start_only {
             if self.ctx.has_multiline_anchors {
                 if from == 0 {
@@ -855,8 +871,17 @@ impl LazyDfa {
                 // before it, hence `from - 1`.
                 for (i, &byte) in input.iter().enumerate().skip(from.saturating_sub(1)) {
                     if byte == b'\n' {
-                        if let Some(end) = self.find_at_inner(input, i + 1) {
-                            return Some((i + 1, end));
+                        let line_start = i + 1;
+                        if self.ctx.ceiling_exceeded {
+                            return None;
+                        }
+                        self.ctx.last_reach = line_start;
+                        if let Some(end) = self.find_at_inner(input, line_start) {
+                            return Some((line_start, end));
+                        }
+                        walked += self.ctx.last_reach.saturating_sub(line_start);
+                        if walked > budget {
+                            return self.find_from_linear_inner(input, line_start + 1);
                         }
                     }
                 }
@@ -867,18 +892,6 @@ impl LazyDfa {
                 None
             }
         } else {
-            // Trying one start at a time is right while the attempts are cheap:
-            // most give up within a byte or two of where they began, and the
-            // first one that matches ends the search. It collapses when they are
-            // not — a pattern that consumes a long run before failing costs a
-            // full scan per start, and the search turns quadratic.
-            //
-            // So the attempts are metered. Once they have collectively walked
-            // several times the input, the pattern is one of those, and the
-            // single-pass search takes over from where the loop stopped.
-            let budget = input.len().saturating_mul(SCAN_BUDGET_FACTOR);
-            let mut walked = 0usize;
-
             for start_pos in from..=input.len() {
                 // The cache ran out under an earlier start; the remaining ones
                 // would scan an incomplete table, so stop and let the entry
@@ -892,8 +905,7 @@ impl LazyDfa {
                 }
                 walked += self.ctx.last_reach.saturating_sub(start_pos);
                 if walked > budget {
-                    let start = self.leftmost_start(input, start_pos + 1)?;
-                    return self.find_at_inner(input, start).map(|end| (start, end));
+                    return self.find_from_linear_inner(input, start_pos + 1);
                 }
             }
             None
@@ -914,8 +926,22 @@ impl LazyDfa {
         guard.finish(outcome)
     }
 
+    /// [`LazyDfa::find_at`], also reporting how far the scan reached, for
+    /// callers that meter attempts at many positions.
+    pub(crate) fn find_at_reach(
+        &mut self,
+        input: &[u8],
+        start: usize,
+    ) -> Result<(Option<usize>, usize), CacheCeilingExceeded> {
+        let mut guard = SearchGuard::new(self);
+        guard.ctx.last_reach = start;
+        let found = guard.find_at_inner(input, start);
+        let reach = guard.ctx.last_reach;
+        guard.finish((found, reach))
+    }
+
     /// [`LazyDfa::find_at`] without the search guard.
-    fn find_at_inner(&mut self, input: &[u8], start: usize) -> Option<usize> {
+    pub(super) fn find_at_inner(&mut self, input: &[u8], start: usize) -> Option<usize> {
         // A previous attempt in this search already ran out of cache; every
         // further one would scan an incomplete table, so unwind instead.
         if self.ctx.ceiling_exceeded {
@@ -1191,7 +1217,7 @@ impl LazyDfa {
     /// the target set also contains a match beginning at the position reached.
     ///
     /// Never dead — the start is always live — so this returns a plain state.
-    fn transition_unanchored(&mut self, state: DfaStateId, byte: u8) -> DfaStateId {
+    pub(super) fn transition_unanchored(&mut self, state: DfaStateId, byte: u8) -> DfaStateId {
         let idx = (state + byte as u32) as usize;
         if idx < self.ctx.transitions_unanchored.len() {
             let tagged = self.ctx.transitions_unanchored[idx];
@@ -1301,63 +1327,6 @@ impl LazyDfa {
         }
 
         next_id
-    }
-
-    /// One pass over `input[from..]`, reporting whether any match starting at or
-    /// before `seed_until` exists.
-    ///
-    /// Positions up to `seed_until` transition in the unanchored automaton, so
-    /// each is considered as a start; past it the anchored automaton takes over
-    /// and no new start is introduced. `seed_until >= input.len()` therefore asks
-    /// "does this pattern match at all", and a smaller value asks "does it match
-    /// starting no later than here" — which is monotone in `seed_until`, and so
-    /// binary-searchable for the leftmost start.
-    fn matches_starting_by(&mut self, input: &[u8], from: usize, seed_until: usize) -> bool {
-        if self.ctx.ceiling_exceeded {
-            return false;
-        }
-
-        let mut state = self.get_start_state_for_position(input, from);
-        if self.is_match(state) && self.check_end_assertions(input, from, state) {
-            return true;
-        }
-
-        for (i, &byte) in input[from..].iter().enumerate() {
-            let pos = from + i;
-            state = if pos < seed_until {
-                self.transition_unanchored(state, byte)
-            } else {
-                match self.transition(state, byte) {
-                    Some(next) => next,
-                    None => return false,
-                }
-            };
-            if self.is_match(state) && self.check_end_assertions(input, pos + 1, state) {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    /// The leftmost start position at or after `from` that begins a match.
-    ///
-    /// Binary search over [`LazyDfa::matches_starting_by`]: each probe is one
-    /// pass, so this costs O(n log n) where trying every start costs O(n²).
-    fn leftmost_start(&mut self, input: &[u8], from: usize) -> Option<usize> {
-        if !self.matches_starting_by(input, from, input.len() + 1) {
-            return None;
-        }
-        let (mut lo, mut hi) = (from, input.len());
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if self.matches_starting_by(input, from, mid) {
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
-        }
-        Some(lo)
     }
 
     /// Get transition, computing if needed, returning tagged state.

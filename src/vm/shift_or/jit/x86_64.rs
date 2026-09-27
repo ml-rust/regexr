@@ -50,6 +50,7 @@ impl ShiftOrJitCompiler {
             shift_or.has_trailing_word_boundary,
             shift_or.has_start_anchor,
             shift_or.has_end_anchor,
+            shift_or.clone(),
         ))
     }
 
@@ -60,7 +61,9 @@ impl ShiftOrJitCompiler {
         follow_ptr: u64,
     ) -> dynasmrt::AssemblyOffset {
         // OPTIMIZED Function signature: fn(input: *const u8, len: usize, accept: u64, first: u64) -> i64
-        // Returns: packed (start << 32 | end) on match, or -1 if no match
+        // Returns: packed (start << 32 | end) on match, -1 if no match, or
+        // -(resume + 2) when the attempts ran out of budget: no match starts
+        // before `resume`, and starts from `resume` on were not tried.
         //
         // Masks and follow pointers are EMBEDDED in the JIT code (movabs instructions)
         // This saves 2 parameter slots and 2 register moves in prologue.
@@ -77,6 +80,7 @@ impl ShiftOrJitCompiler {
         //   r14 = saved input pointer
         //   r15 = saved len
         //   rbx = masks pointer (embedded)
+        //   rdx = bytes the failed attempts may still walk (4 * (len + 1))
         //   [rsp+0] = first mask (only used at start of each position)
         //   [rsp+8] = last_match_start
         //   [rsp+16] = last_match_end
@@ -131,6 +135,7 @@ impl ShiftOrJitCompiler {
             ; .arch x64
             // Initialize - match state on stack (less frequently accessed)
             ; xor r10d, r10d         // r10 = start position = 0
+            ; lea rdx, [r15*4 + 4]   // rdx = walk budget = 4 * (len + 1)
             ; mov QWORD [rsp+16], -1 // last_match_end = -1
             ; mov QWORD [rsp+8], 0   // last_match_start = 0
 
@@ -152,9 +157,36 @@ impl ShiftOrJitCompiler {
             ; cmp rax, -1
             ; jne ->found_at_start
 
-            // Inner loop: process remaining bytes
+            // The attempt's second byte, peeled out of the loop below: an
+            // attempt that dies on it restarts without being charged to the
+            // walk budget, which keeps the common short attempt unmetered.
             ; lea rcx, [r10 + 1]     // rcx = pos = start + 1
+            ; cmp rcx, r15
+            ; jae ->next_start
+            ; mov rax, r11
+            ; not rax                // rax = active positions
+            ; xor rdi, rdi           // rdi = reachable = 0
+            ; ->follow_loop_first:
+            ; test rax, rax
+            ; jz ->follow_done_first
+            ; bsf rsi, rax
+            ; or rdi, [r12 + rsi*8]
+            ; blsr rax, rax
+            ; jmp ->follow_loop_first
+            ; ->follow_done_first:
+            ; mov r11, rdi
+            ; not r11
+            ; movzx eax, BYTE [r14 + rcx]
+            ; or r11, [rbx + rax*8]
+            ; mov rax, r11
+            ; or rax, r13
+            ; cmp rax, -1
+            ; jne ->found_in_loop
+            ; cmp r11, -1
+            ; je ->next_start
+            ; inc rcx
 
+            // Inner loop: process remaining bytes
             ; ->inner_loop:
             ; cmp rcx, r15
             ; jae ->inner_done
@@ -229,9 +261,23 @@ impl ShiftOrJitCompiler {
             ; cmp QWORD [rsp+16], -1
             ; jne ->done
 
+            // Charge the failed attempt's walk to the budget. Past it, the
+            // caller takes over with a linear-time search.
+            ; mov rax, rcx
+            ; sub rax, r10           // rax = bytes this attempt walked
+            ; sub rdx, rax
+            ; jb ->gave_up
+
             // Try next start position
+            ; ->next_start:
             ; inc r10
             ; jmp ->start_loop
+
+            ; ->gave_up:
+            // Return -(resume + 2) with resume = start + 1.
+            ; lea rax, [r10 + 3]
+            ; neg rax
+            ; jmp ->epilogue
 
             ; ->done:
             // Check if we have a match

@@ -39,6 +39,11 @@ pub struct JitShiftOr {
     has_start_anchor: bool,
     /// Whether the pattern has an end anchor ($).
     has_end_anchor: bool,
+    /// The interpreted matcher the code was compiled from. It answers the
+    /// searches the generated code does not: an end-anchored search, and the
+    /// linear-time search the generated code hands over to when its attempts
+    /// run out of budget.
+    shift_or: ShiftOr,
 }
 
 impl std::fmt::Debug for JitShiftOr {
@@ -76,6 +81,7 @@ impl JitShiftOr {
         has_trailing_wb: bool,
         has_start_anchor: bool,
         has_end_anchor: bool,
+        shift_or: ShiftOr,
     ) -> Self {
         Self {
             code,
@@ -90,6 +96,7 @@ impl JitShiftOr {
             has_trailing_wb,
             has_start_anchor,
             has_end_anchor,
+            shift_or,
         }
     }
 
@@ -130,6 +137,12 @@ impl JitShiftOr {
             return None;
         }
 
+        // The generated code has no notion of `$`; the interpreter's search
+        // for a match ending where it holds is metered and linear.
+        if self.has_end_anchor {
+            return self.shift_or.find(input);
+        }
+
         // Try to find a non-empty match first (greedy)
         if !input.is_empty() {
             let result = self.call_find(input);
@@ -138,13 +151,13 @@ impl JitShiftOr {
                 let packed = result as u64;
                 let start = (packed >> 32) as usize;
                 let end = (packed & 0xFFFF_FFFF) as usize;
-
-                // For end anchor: only accept matches that end at input end
-                if self.has_end_anchor && !crate::nfa::at_end_or_before_final_newline(input, end) {
-                    // Need to search for a match that ends at input.len()
-                    return self.find_with_end_anchor(input);
-                }
                 return Some((start, end));
+            }
+            if result <= -2 {
+                // The attempts ran out of budget; no match starts before
+                // `resume`.
+                let resume = result.unsigned_abs() as usize - 2;
+                return self.shift_or.find_linear(input, resume);
             }
         }
 
@@ -156,21 +169,6 @@ impl JitShiftOr {
             return Some((0, 0));
         }
 
-        None
-    }
-
-    /// Find a match that ends at input.len() (for end anchor).
-    fn find_with_end_anchor(&self, input: &[u8]) -> Option<(usize, usize)> {
-        for start in 0..=input.len() {
-            if let Some(end) = self.match_at(&input[start..]) {
-                if crate::nfa::at_end_or_before_final_newline(input, start + end) {
-                    return Some((start, start + end));
-                }
-            }
-        }
-        if self.nullable {
-            return Some((input.len(), input.len()));
-        }
         None
     }
 
@@ -332,16 +330,9 @@ impl JitShiftOr {
             return None;
         }
 
-        // For end anchor, only accept matches that end at input.len()
+        // For end anchor, only accept matches that end where `$` holds.
         if self.has_end_anchor {
-            for start in pos..=input.len() {
-                if let Some(end) = self.match_at(&input[start..]) {
-                    if start + end == input.len() {
-                        return Some((start, start + end));
-                    }
-                }
-            }
-            return None;
+            return self.shift_or.find_at(input, pos);
         }
 
         // No anchors: delegate to find on slice and adjust positions
@@ -349,6 +340,16 @@ impl JitShiftOr {
             return None;
         }
         self.find(&input[pos..]).map(|(s, e)| (pos + s, pos + e))
+    }
+
+    /// [`JitShiftOr::try_match_at`], also reporting how far the attempt
+    /// walked, for callers that meter attempts at many positions.
+    pub(crate) fn try_match_at_reach(
+        &self,
+        input: &[u8],
+        pos: usize,
+    ) -> (Option<(usize, usize)>, usize) {
+        self.shift_or.try_match_at_reach(input, pos)
     }
 
     /// Tries to match at exactly the given position.
