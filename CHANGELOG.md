@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on 
 
 Each release must have a non-empty section here before it can be tagged — `.github/workflows/release-validate.yml` refuses a tag whose version has no entry, and the GitHub Release body is this file's section for that version.
 
-## [Unreleased]
+## [0.6.0] - 2026-09-28
 
 ### Fixed
 
@@ -13,6 +13,11 @@ Each release must have a non-empty section here before it can be tagged — `.gi
 - The JIT-compiled DFA gave up at the first start whose attempt reached the end of the input: `a(?:ab)?b` found no match in `aab`.
 - `^`, `$`, `\b` and `\B` inside a match, stacked, or on an optional path were misjudged by the DFA engines and Shift-Or: `a$a` matched `aa`.
 - A search whose attempts each scanned far before failing took time quadratic in the input on the DFA, Shift-Or and tagged-NFA engines: `(?s)a.*b` over 50 KB of `a` took seconds.
+
+### Added
+
+- `engine::automata_match_like_pikevm`, which reports whether the DFA engines and Shift-Or give a pattern the PikeVM's match.
+- `nfa::priority_is_irrelevant` and `nfa::assertions_at_edges`, the two NFA properties that decision rests on.
 
 ### Changed
 

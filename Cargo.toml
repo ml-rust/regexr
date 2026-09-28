@@ -1,6 +1,6 @@
 [package]
 name = "regexr"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 # The MSRV is a published contract, not a CI-only constant: cargo refuses the
 # build on an older toolchain instead of failing somewhere inside the compile,
