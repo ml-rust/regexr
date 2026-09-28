@@ -302,7 +302,7 @@ impl EagerDfa {
     /// a failed attempt gives up near where it began, and quadratic when it
     /// does not: `(?s)a.*b` over a run of `a` scans to the end from every
     /// start. So every loop is metered. Once the attempts have collectively
-    /// walked past [`scan_budget`] — a few times the input, or the longest
+    /// walked past `scan_budget` — a few times the input, or the longest
     /// match times the input when that is bounded — `Err` hands the search to
     /// a caller that runs the linear-time search instead (see
     /// [`EagerScanBudgetExceeded`]).

@@ -116,7 +116,7 @@ impl TaggedNfa {
     ///
     /// Unmetered: attempts at every start, each backtracking its greedy runs,
     /// can cost far more than one pass over the input. The engines use
-    /// [`TaggedNfa::find_at_metered`] and re-run a search that runs out of
+    /// `TaggedNfa::find_at_metered` and re-run a search that runs out of
     /// budget on the PikeVM.
     pub fn find_at(
         steps: &[PatternStep],
