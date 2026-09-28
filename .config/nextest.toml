@@ -13,3 +13,10 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 # .github/workflows/test.yml.
 [profile.default.junit]
 path = "junit.xml"
+
+# The growth checks time each search at `n` and `4n` and fail on the ratio.
+# Beside a thousand other tests, a preempted `4n` run lands past the limit on a
+# linear search. Reserving every test thread runs each one alone.
+[[profile.default.overrides]]
+filter = 'binary(bounded_execution) & test(/_grows_linearly$/)'
+threads-required = "num-cpus"

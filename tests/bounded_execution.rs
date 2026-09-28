@@ -528,7 +528,17 @@ fn word_boundary_long_run_rejection_stays_linear() {
 // anything and passes; a quadratic search at `4n` is far above it.
 
 /// Input length `n` for the growth checks; each search also runs at `4n`.
-const GROWTH_INPUT: usize = 20_000;
+///
+/// Debug builds, which CI's test jobs run unoptimized, measure at a tenth of
+/// the length. Unoptimized code costs about ten times the instructions per
+/// byte, and at full length the tagged-NFA cases alone ran past
+/// `SCALING_DEADLINE`. The ratio is what is checked, and a search that scans
+/// once per start still takes far longer than `SCALING_FLOOR` at `4n` here.
+const GROWTH_INPUT: usize = if cfg!(debug_assertions) {
+    2_000
+} else {
+    20_000
+};
 
 /// Largest accepted ratio of the `4n` time to the `n` time. Linear work gives
 /// 4 and one scan per start 16; this sits between them with room for noise.
@@ -699,7 +709,16 @@ fn shift_or_search_grows_linearly() {
             GrowthCase::new(r"[a-z]+\d", "a", "").engines("ShiftOr", "JitShiftOr"),
             GrowthCase::new(r"a[a-z]*!", "a", "9a!"),
             GrowthCase::new(r"(a+)+$", "a", "!"),
-            GrowthCase::new(r"x[a-z]*y{70}", "x", "!").engines("ShiftOrWide", "Jit"),
+            // Over 64 DFA states: the x86-64 JIT compiles it, while the ARM64
+            // emitter's state limit leaves it on Wide Shift-Or.
+            GrowthCase::new(r"x[a-z]*y{70}", "x", "!").engines(
+                "ShiftOrWide",
+                if cfg!(target_arch = "aarch64") {
+                    "ShiftOrWide"
+                } else {
+                    "Jit"
+                },
+            ),
         ]);
     });
 }
