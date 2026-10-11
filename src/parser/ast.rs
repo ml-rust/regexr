@@ -177,7 +177,7 @@ pub enum GroupKind {
 pub struct Class {
     /// The ranges in this class.
     pub ranges: Vec<ClassRange>,
-    /// Whether this class is negated ([^...]).
+    /// Whether this class is negated (`[^...]`).
     pub negated: bool,
 }
 
