@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format is based on 
 
 Each release must have a non-empty section here before it can be tagged — `.github/workflows/release-validate.yml` refuses a tag whose version has no entry, and the GitHub Release body is this file's section for that version.
 
+## [0.6.1] - 2026-10-11
+
+### Fixed
+
+- A build with the `jit` feature on a target other than x86_64 or aarch64 no longer compiles an internal lazy-DFA function that only the JIT code generator calls.
+- Rustdoc no longer reports broken intra-doc links to `scan_budget` and `TaggedNfa::find_at_metered`.
+
 ## [0.6.0] - 2026-09-28
 
 ### Fixed
