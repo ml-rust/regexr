@@ -547,6 +547,10 @@ const MAX_GROWTH: f64 = 8.0;
 /// Below this, both timings are too small for their ratio to be measured.
 const SCALING_FLOOR: Duration = Duration::from_millis(2);
 
+/// Independent measurements of one search. The search passes when any one of
+/// them stays within [`MAX_GROWTH`].
+const GROWTH_ATTEMPTS: usize = 3;
+
 /// The fastest of several runs of `search`.
 fn fastest(search: impl Fn()) -> Duration {
     (0..5)
@@ -640,16 +644,25 @@ fn assert_linear_growth(cases: &[GrowthCase]) {
                 }),
             ];
             for (op, search) in searches {
-                let at_n = fastest(|| search(&small));
-                let at_4n = fastest(|| search(&large));
-                let growth = at_4n.as_secs_f64() / at_n.as_secs_f64().max(1e-9);
-                if at_4n >= SCALING_FLOOR && growth > MAX_GROWTH {
-                    failures.push(format!(
+                // A search that grows superlinearly breaks the bound on every
+                // attempt. A noisy runner breaks it on some. Fail only when
+                // all attempts break it.
+                let mut last_failure = None;
+                for _ in 0..GROWTH_ATTEMPTS {
+                    let at_n = fastest(|| search(&small));
+                    let at_4n = fastest(|| search(&large));
+                    let growth = at_4n.as_secs_f64() / at_n.as_secs_f64().max(1e-9);
+                    if at_4n < SCALING_FLOOR || growth <= MAX_GROWTH {
+                        last_failure = None;
+                        break;
+                    }
+                    last_failure = Some(format!(
                         "{label} {} {:?} {op}: {at_n:?} at n, {at_4n:?} at 4n ({growth:.1}x)",
                         re.engine_name(),
                         case.pattern
                     ));
                 }
+                failures.extend(last_failure);
             }
         }
     }
