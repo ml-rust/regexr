@@ -373,9 +373,9 @@ impl LazyDfa {
     /// `Err` means the cache hit its ceiling inside `f`: states are missing, so
     /// whatever `f` computed is incomplete rather than merely negative.
     ///
-    /// Only the JIT materializes a DFA this way, so without that feature nothing
-    /// calls this.
-    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    /// Only the JIT code generator materializes a DFA this way. It compiles
+    /// only with the `jit` feature on x86_64 or aarch64, and so does this.
+    #[cfg(all(feature = "jit", any(target_arch = "x86_64", target_arch = "aarch64")))]
     pub(crate) fn with_flushes_suppressed<T>(
         &mut self,
         f: impl FnOnce(&mut LazyDfa) -> T,
