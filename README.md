@@ -1,68 +1,78 @@
-![regexr](https://raw.githubusercontent.com/ml-rust/regexr/main/images/regexr.png)
+<div align="center">
 
 # regexr
 
-**A specialized Rust regex engine designed for LLM tokenization and complex pattern matching.**
+<h3>A Rust regex engine with lookarounds, backreferences, and JIT compilation.</h3>
 
-[![Crates.io](https://img.shields.io/crates/v/regexr.svg)](https://crates.io/crates/regexr)
-[![Documentation](https://docs.rs/regexr/badge.svg)](https://docs.rs/regexr)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
+<p>
+Built for LLM tokenizer patterns. Pure Rust: lookarounds and JIT compilation need no C
+toolchain or system library.
+</p>
 
----
+<p>
+  <a href="https://docs.rs/regexr"><strong>Docs</strong></a>
+  ·
+  <a href="https://crates.io/crates/regexr"><strong>Crate</strong></a>
+  ·
+  <a href="#engine-selection"><strong>Engines</strong></a>
+  ·
+  <a href="#feature-flags"><strong>Features</strong></a>
+  ·
+  <a href="#quick-start"><strong>Example</strong></a>
+  ·
+  <a href="CONTRIBUTING.md"><strong>Contributing</strong></a>
+</p>
 
-> Originally created as the regex backend for [**splintr**](https://github.com/ml-rust/splintr), an LLM tokenizer. Passes compliance tests for industry-standard tokenizer patterns (OpenAI's `cl100k_base`, Meta's Llama 3).
->
-> Please report issues on the [Issue Tracker](https://github.com/ml-rust/regexr/issues).
+<p>
+  <a href="https://discord.gg/jBhFk9kHPg">
+    <img src="https://img.shields.io/discord/1453357769720594543?label=Discord&logo=discord&logoColor=white&color=5865F2" alt="Join the Discord">
+  </a>
+</p>
 
----
+<p>
+  <a href="https://github.com/ml-rust/regexr/actions/workflows/ci.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/ml-rust/regexr/ci.yml?branch=main&label=ci" alt="CI status">
+  </a>
+  <a href="https://crates.io/crates/regexr">
+    <img src="https://img.shields.io/crates/v/regexr" alt="crates.io">
+  </a>
+  <a href="https://docs.rs/regexr">
+    <img src="https://img.shields.io/docsrs/regexr" alt="docs.rs">
+  </a>
+  <a href="LICENSE-MIT">
+    <img src="https://img.shields.io/crates/l/regexr" alt="License">
+  </a>
+  <a href="https://github.com/ml-rust/regexr/stargazers">
+    <img src="https://img.shields.io/github/stars/ml-rust/regexr?style=social" alt="GitHub stars">
+  </a>
+</p>
 
-## 🎯 When to use `regexr`
+</div>
 
-**This is a specialized tool, not a general-purpose replacement.**
+## What is regexr
 
-The Rust ecosystem already has the excellent, battle-tested [**`regex`**](https://crates.io/crates/regex) crate. For 99% of use cases, you should use that.
+regexr is a regex engine written from scratch in Rust. It was created as the regex backend for [splintr](https://github.com/ml-rust/splintr), an LLM tokenizer.
 
-**Only use `regexr` if you specifically need:**
+Use regexr when a pattern needs one of these features:
 
-1.  **Lookarounds:** You need `(?=...)`, `(?<=...)`, or `(?!\S)` without a C build dependency.
-    - _Why not `regex`?_ It intentionally omits lookarounds to guarantee linear time.
-    - _Why not `fancy-regex`?_ No JIT compilation.
-2.  **JIT Compilation:** You want native code generation for hot regex patterns.
-    - _Why not `regex`/`fancy-regex`?_ Neither offers JIT compilation.
-    - _Why not `pcre2`?_ Requires installing a system C library (libpcre2).
-3.  **No System Dependencies:** Just `cargo add regexr` — no C toolchain or system libraries required. All code (including JIT) compiles with `cargo build`.
-4.  **WASM Support:** Compiles to `wasm32-unknown-unknown` with `--no-default-features`. Same API and features across native and WASM targets — JIT/SIMD are disabled automatically, but lookarounds, backreferences, and bounded execution all work. No need to swap crates per platform.
-5.  **Bounded Execution:** Matching runs on automaton engines that track all alternatives at once, so time is linear in the input and no pattern backtracks catastrophically — including capture extraction, which is the operation most engines quietly hand to a backtracker. Backreferences are the one exception, because matching them is NP-hard: those patterns run on a backtracking engine under a step budget you can set with `RegexBuilder::backtrack_limit`, and `try_find` / `try_captures` / `try_is_match` report an exhausted budget rather than reporting "no match".
+| Feature | `regexr` | `regex` | `fancy-regex` | `pcre2` |
+|---------|----------|---------|---------------|---------|
+| Lookarounds (`(?=...)`, `(?<=...)`, `(?!...)`) | Yes | No | Yes | Yes |
+| Backreferences | Yes | No | Yes | Yes |
+| JIT compilation | Yes (x86-64, aarch64) | No | No | Yes |
+| No C library dependency | Yes | Yes | Yes | No (links libpcre2) |
 
-## The Problem Solved
+`regex` omits lookarounds and backreferences on purpose. Use it for everything else.
 
-Developers building LLM tokenizers (like GPT-4 or Llama 3) currently face a dilemma in Rust:
+Patterns without backreferences run on automaton engines, which report the match in time linear in the input. Backreferences run on a backtracking engine with a step budget. See [Bounded execution](#bounded-execution).
 
-- **`regex` crate:** Fast, safe, but **lacks lookarounds** and **JIT compilation**.
-- **`fancy-regex`:** Supports lookarounds, but **lacks JIT compilation**.
-- **`pcre2`:** Supports everything including JIT, but requires **system C library installation** and cross-compilation setup.
+## Quick Start
 
-**`regexr` bridges this gap.** It provides **Lookarounds + JIT compilation + Backreferences** with no system dependencies — just `cargo add` and go.
+Add the crate with `cargo add regexr`. For JIT and SIMD, enable the `full` feature:
 
-## Installation
-
-Add this to your `Cargo.toml`:
-
-```toml
-[dependencies]
-regexr = "*"
+```bash
+cargo add regexr --features full
 ```
-
-For JIT compilation support:
-
-```toml
-[dependencies]
-regexr = { version = "*", features = ["full"] }
-```
-
-## Usage
-
-### Basic matching
 
 ```rust
 use regexr::Regex;
@@ -70,7 +80,7 @@ use regexr::Regex;
 let re = Regex::new(r"\w+").unwrap();
 assert!(re.is_match("hello"));
 
-// Find first match
+// Find the first match
 if let Some(m) = re.find("hello world") {
     println!("Found: {}", m.as_str()); // "hello"
 }
@@ -81,7 +91,9 @@ for m in re.find_iter("hello world") {
 }
 ```
 
-### Capture groups
+## Usage
+
+### Capture Groups
 
 ```rust
 use regexr::Regex;
@@ -91,11 +103,9 @@ let caps = re.captures("user@example.com").unwrap();
 
 println!("{}", &caps[0]); // "user@example.com"
 println!("{}", &caps[1]); // "user"
-println!("{}", &caps[2]); // "example"
-println!("{}", &caps[3]); // "com"
 ```
 
-### Named captures
+### Named Captures
 
 ```rust
 use regexr::Regex;
@@ -107,9 +117,9 @@ println!("{}", &caps["user"]);   // "user"
 println!("{}", &caps["domain"]); // "example.com"
 ```
 
-### JIT compilation
+### JIT Compilation
 
-Enable JIT for patterns that will be matched many times:
+Enable JIT for a pattern that runs many times. JIT needs the `jit` feature.
 
 ```rust
 use regexr::RegexBuilder;
@@ -122,9 +132,9 @@ let re = RegexBuilder::new(r"\w+")
 assert!(re.is_match("hello"));
 ```
 
-### Prefix optimization for tokenizers
+### Prefix Optimization
 
-For patterns with many literal alternatives (e.g., keyword matching in tokenizers):
+For patterns with many literal alternatives, such as keyword lists in tokenizers:
 
 ```rust
 use regexr::RegexBuilder;
@@ -137,104 +147,90 @@ let re = RegexBuilder::new(r"(function|for|while|if|else|return)")
 assert!(re.is_match("function"));
 ```
 
-### Text replacement
+### Replacement
 
 ```rust
 use regexr::Regex;
 
 let re = Regex::new(r"\d+").unwrap();
 
-// Replace first match
-let result = re.replace("abc 123 def", "NUM");
-assert_eq!(result, "abc NUM def");
-
-// Replace all matches
-let result = re.replace_all("abc 123 def 456", "NUM");
-assert_eq!(result, "abc NUM def NUM");
+assert_eq!(re.replace("abc 123 def", "NUM"), "abc NUM def");
+assert_eq!(re.replace_all("abc 123 def 456", "NUM"), "abc NUM def NUM");
 ```
 
-## Feature Flags
+### Bounded Execution
 
-- `simd` (default): Enables SIMD-accelerated literal search
-- `jit`: Enables JIT compilation (x86-64 and ARM64)
-- `full`: Enables both JIT and SIMD
+Backreferences can take exponential time. Set a step budget with `RegexBuilder::backtrack_limit`:
 
-### Platform Support
+```rust
+use regexr::RegexBuilder;
 
-| Platform                    | JIT Support | SIMD Support |
-| --------------------------- | ----------- | ------------ |
-| Linux x86-64                | ✓           | ✓ (AVX2)     |
-| Linux ARM64                 | ✓           | ✗            |
-| macOS x86-64                | ✓           | ✓ (AVX2)     |
-| macOS ARM64 (Apple Silicon) | ✓           | ✗            |
-| Windows x86-64              | ✓           | ✓ (AVX2)     |
-| WASM (wasm32)               | ✗           | ✗            |
-| Other                       | ✗           | ✗            |
+let re = RegexBuilder::new(r"(a+)\1")
+    .backtrack_limit(1_000_000)
+    .build()
+    .unwrap();
 
-Build without default features for a minimal installation (also works for WASM):
-
-```bash
-cargo build --no-default-features                           # Minimal (PikeVM + LazyDFA only)
-cargo build --no-default-features --target wasm32-unknown-unknown  # WASM target
+match re.try_is_match("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!") {
+    Ok(matched) => println!("matched: {matched}"),
+    Err(e) => println!("budget exhausted: {e}"),
+}
 ```
 
-Build with all optimizations:
-
-```bash
-cargo build --features "full"
-```
+`try_find`, `try_captures`, and `try_is_match` return an error when the budget runs out. `find`, `captures`, and `is_match` do not report that case.
 
 ## Engine Selection
 
-The library automatically selects the best execution engine based on pattern characteristics:
+regexr picks one engine for each pattern. Call `Regex::engine_name()` to read the choice.
 
-**Non-JIT mode** (default):
+Engines without `jit` (default `simd` build):
 
-- **ShiftOr**: Small patterns (≤64 states) without anchors/word boundaries
-- **EagerDfa**: Patterns with word boundaries or anchors
-- **LazyDfa**: General patterns with on-demand state construction
-- **BacktrackingVm**: Patterns with backreferences
-- **PikeVm**: Patterns with lookaround or non-greedy quantifiers
+| Engine name | Used for |
+|-------------|----------|
+| `ShiftOr` | Patterns up to 64 character positions |
+| `ShiftOrWide` | Patterns from 65 to 256 character positions |
+| `LazyDfa` | Most other patterns |
+| `EagerDfa` | Fully built form of `LazyDfa`, used when the build fits its budget |
+| `PikeVm` | Lookarounds, non-greedy quantifiers, and boundary-guarded empty matches |
+| `TaggedNfa` | Unicode codepoint classes, such as `\p{L}` |
+| `BacktrackingVm` | Backreferences |
+| `CodepointClass` | Codepoint-class matching |
 
-**JIT mode** (with `jit` feature):
+With the `jit` feature on x86-64 or aarch64, the matching JIT engines are `Jit`, `JitShiftOr`, `TaggedNfaJit`, and `BacktrackingJit`.
 
-- **BacktrackingJit**: Patterns with backreferences
-- **TaggedNfa**: Patterns with lookaround or non-greedy quantifiers
-- **JitShiftOr**: Small patterns with alternations
-- **DFA JIT**: General patterns, benefits from SIMD prefiltering
+Capture extraction uses a one-pass engine when the pattern allows it. [docs/architecture.md](docs/architecture.md) explains the selection rules in full.
 
-See [docs/architecture.md](https://github.com/ml-rust/regexr/blob/main/docs/architecture.md) for details on the engine selection logic.
+## Feature Flags
 
-## Performance
+| Feature | Default | Enables |
+|---------|---------|---------|
+| `simd` | On | SIMD literal search (AVX2 on x86-64, NEON on aarch64) |
+| `jit` | Off | JIT compilation on x86-64 and aarch64 |
+| `full` | Off | `jit` and `simd` |
 
-Speedup relative to `regex` crate (higher is better):
+```bash
+cargo build                                  # simd (default)
+cargo build --features full                  # jit + simd
+cargo build --no-default-features            # scalar search, no JIT
+cargo check --no-default-features --target wasm32-unknown-unknown
+```
 
-![Performance Heatmap](https://raw.githubusercontent.com/ml-rust/regexr/main/images/speedup_heatmap.png)
+### Platform Support
 
-**Highlights** (speedup vs `regex` crate):
+- **JIT:** x86-64 and aarch64. Windows x86-64 uses the Windows calling convention.
+- **SIMD:** AVX2 on x86-64, detected at run time. NEON on aarch64. A scalar fallback runs on every other target.
+- **WASM:** `wasm32-unknown-unknown` builds with `--no-default-features`. CI checks this build.
 
-| Benchmark        | `regexr`       | `regexr-jit`   | `pcre2-jit` |
-| ---------------- | -------------- | -------------- | ----------- |
-| log_parsing      | 0.80-0.84x     | **3.91-4.09x** | 3.57-3.71x  |
-| url_extraction   | 0.81-0.83x     | **1.95-1.99x** | 2.10-2.13x  |
-| unicode_letters  | **1.24x**      | **1.43-1.44x** | 1.65-1.72x  |
-| html_tags        | 0.82-0.87x     | **1.33-1.43x** | 0.80-0.85x  |
-| word_boundary    | **1.19-1.24x** | **1.15-1.19x** | 0.72-0.74x  |
-| email_validation | 0.99-1.00x     | 1.00-1.11x     | 0.94-1.00x  |
-| alternation      | 0.88-1.01x     | 0.88-1.01x     | 0.12-0.15x  |
+## Benchmarks
 
-- **`regexr-jit`** excels at log parsing (4x faster than `regex`)
-- **`regexr`** (non-JIT) matches `regex` performance on most patterns
-- Both outperform `fancy-regex` and `pcre2` (non-JIT) consistently
+Run `cargo bench --bench competitors` to compare regexr with `regex`, `fancy-regex`, and `pcre2`. This README does not publish benchmark numbers. Results depend on the machine.
 
 ## Documentation
 
-- [Architecture Overview](https://github.com/ml-rust/regexr/blob/main/docs/architecture.md) - Engine architecture and selection logic
-- [Features](https://github.com/ml-rust/regexr/blob/main/docs/features.md) - Detailed feature documentation
+- [docs/architecture.md](docs/architecture.md): engine architecture and selection rules
+- [docs/features.md](docs/features.md): feature reference
+- [docs/engine_structure.md](docs/engine_structure.md): engine module layout
 
 ## Citation
-
-If you use `regexr` in your research, please cite:
 
 ```bibtex
 @software{regexr2025,
@@ -245,3 +241,13 @@ If you use `regexr` in your research, please cite:
   note         = {Rust regex engine with lookaround support and JIT compilation}
 }
 ```
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions and checks.
+
+Questions and design discussion happen on [Discord](https://discord.gg/jBhFk9kHPg).
+
+## License
+
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
