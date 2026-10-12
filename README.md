@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="https://raw.githubusercontent.com/ml-rust/regexr/main/images/regexr.png" alt="regexr" width="640">
+
 # regexr
 
 <h3>A Rust regex engine with lookarounds, backreferences, and JIT compilation.</h3>
@@ -223,6 +225,10 @@ cargo check --no-default-features --target wasm32-unknown-unknown
 ## Benchmarks
 
 Run `cargo bench --bench competitors` to compare regexr with `regex`, `fancy-regex`, and `pcre2`. This README does not publish benchmark numbers. Results depend on the machine.
+
+Speedup relative to the `regex` crate (higher is better):
+
+![Performance Heatmap](https://raw.githubusercontent.com/ml-rust/regexr/main/images/speedup_heatmap.png)
 
 ## Documentation
 
