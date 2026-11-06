@@ -7,10 +7,10 @@ edition = "2021"
 # and the `msrv` CI job reads this value rather than hardcoding its own.
 rust-version = "1.83"
 authors = ["Farhan Syah"]
-description = "A high-performance regex engine built from scratch with JIT compilation and SIMD acceleration"
+description = "Regex engine for Rust, written from scratch, with lookarounds, backreferences, JIT compilation and SIMD search"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ml-rust/regexr"
-keywords = ["regex", "jit", "simd", "pattern-matching"]
+keywords = ["regex", "pcre", "lookaround", "jit", "simd"]
 categories = ["text-processing", "parsing"]
 
 # Repository scaffolding that no consumer builds against. The Unicode tables
