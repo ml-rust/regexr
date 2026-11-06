@@ -43,7 +43,7 @@ aho-corasick = "1.1"
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 regex = "1.13"
-fancy-regex = "0.19"
+fancy-regex = "0.20"
 pcre2 = "0.2"
 aho-corasick = "1.1"
 
