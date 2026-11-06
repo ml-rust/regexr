@@ -53,7 +53,8 @@ toolchain or system library.
 
 ## What is regexr
 
-regexr is a regex engine written from scratch in Rust. It was created as the regex backend for [splintr](https://github.com/ml-rust/splintr), an LLM tokenizer.
+regexr is a regex engine for Rust, written from scratch. It was created as the regex backend for [splintr](https://github.com/ml-rust/splintr), an LLM tokenizer.
+It is a Rust alternative to PCRE2 for patterns that need lookarounds and backreferences. It needs Rust 1.83 or newer and no Python.
 
 Use regexr when a pattern needs one of these features:
 
@@ -67,6 +68,11 @@ Use regexr when a pattern needs one of these features:
 `regex` omits lookarounds and backreferences on purpose. Use it for everything else.
 
 Patterns without backreferences run on automaton engines, which report the match in time linear in the input. Backreferences run on a backtracking engine with a step budget. See [Bounded execution](#bounded-execution).
+
+Not supported yet:
+
+- Atomic groups `(?>...)` and possessive quantifiers. Both return a parse error.
+- The `\N{NAME}` named Unicode escape. It returns a parse error.
 
 ## Quick Start
 

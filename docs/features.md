@@ -357,7 +357,7 @@ When JIT is enabled, the engine is selected based on:
 
 SIMD acceleration is enabled by default through the `simd` feature. It provides:
 
-- AVX2-accelerated literal search using Teddy algorithm
+- Literal search using the Teddy algorithm, with AVX2 on x86-64 and NEON on aarch64
 - Fast multi-pattern matching for 2-8 literals
 - Automatic fallback to scalar implementations when SIMD is unavailable
 
@@ -582,20 +582,20 @@ Ensure the engine matches your expectations for the pattern type.
 
 ### Current Limitations
 
-1. **SIMD**: Only available on x86-64 with AVX2 support
-2. **JIT**: Not available on WASM — falls back to interpreted engines automatically
-3. **Multiline mode**: Currently `.` never matches newline
-4. **Backreferences**: Cannot be combined with JIT DFA (uses BacktrackingJit instead)
-5. **Variable-width lookbehind**: Limited support (fixed-width lookbehind only)
+1. **SIMD**: AVX2 on x86-64 and NEON on aarch64. Every other target uses the scalar fallback
+2. **JIT**: Not available on WASM. It falls back to interpreted engines automatically
+3. **Backreferences**: Cannot be combined with JIT DFA (uses BacktrackingJit instead)
+4. **Atomic groups and possessive quantifiers**: `(?>...)` and `a*+` return a parse error
+5. **Named Unicode escapes**: `\N{NAME}` returns a parse error
 
 ### Platform Support
 
 | Platform                    | JIT Support | SIMD Support |
 | --------------------------- | ----------- | ------------ |
 | Linux x86-64                | ✓           | ✓ (AVX2)     |
-| Linux ARM64                 | ✓           | ✗            |
+| Linux ARM64                 | ✓           | ✓ (NEON)     |
 | macOS x86-64                | ✓           | ✓ (AVX2)     |
-| macOS ARM64 (Apple Silicon) | ✓           | ✗            |
+| macOS ARM64 (Apple Silicon) | ✓           | ✓ (NEON)     |
 | Windows x86-64              | ✓           | ✓ (AVX2)     |
 | WASM (wasm32)               | ✗           | ✗            |
 | Other                       | ✗           | ✗            |
